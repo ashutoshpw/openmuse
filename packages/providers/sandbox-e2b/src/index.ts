@@ -456,6 +456,23 @@ function uncertain(
   );
 }
 
+function commandResultFromError(error: unknown): E2BCommandResult | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as Partial<E2BCommandResult>;
+  if (
+    typeof candidate.exitCode !== "number" ||
+    typeof candidate.stdout !== "string" ||
+    typeof candidate.stderr !== "string"
+  )
+    return undefined;
+  return {
+    exitCode: candidate.exitCode,
+    stdout: candidate.stdout,
+    stderr: candidate.stderr,
+    ...(candidate.error ? { error: candidate.error } : {}),
+  };
+}
+
 export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): SandboxDriver {
   const providerId = options.providerId ?? "sandbox-e2b";
   const instanceId = options.instanceId ?? crypto.randomUUID();
@@ -593,6 +610,13 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
             "The sandbox could not be inspected.",
           );
         }
+        if (outcome.kind === "aborted" && context.signal.aborted)
+          throw providerError(
+            providerId,
+            operation,
+            "cancelled",
+            "The sandbox inspection was cancelled.",
+          );
         if (outcome.kind !== "value")
           throw providerError(
             providerId,
@@ -637,6 +661,13 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
             context.signal,
             controlTimeoutMs,
           );
+          if (infoOutcome.kind === "aborted" && context.signal.aborted)
+            throw providerError(
+              providerId,
+              "reconnect",
+              "cancelled",
+              "The sandbox lookup was cancelled.",
+            );
           if (infoOutcome.kind !== "value")
             throw providerError(
               providerId,
@@ -664,6 +695,13 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
             context.signal,
             controlTimeoutMs,
           );
+          if (connected.kind === "aborted" && context.signal.aborted)
+            throw providerError(
+              providerId,
+              "reconnect",
+              "cancelled",
+              "The sandbox connection was cancelled.",
+            );
           if (connected.kind !== "value")
             throw providerError(
               providerId,
@@ -767,8 +805,7 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
                   "The sandbox creation cleanup outcome is unknown.",
                 );
             }
-            if (cause instanceof ProviderOperationError && cause.code === "unknown_outcome")
-              throw cause;
+            if (cause instanceof ProviderOperationError) throw cause;
             if (context.signal.aborted)
               throw providerError(
                 providerId,
@@ -974,7 +1011,16 @@ class E2BResource implements Sandbox {
     }
     let waited: E2BOutcome<E2BCommandResult>;
     try {
-      waited = await callWithDeadline(() => handle!.wait(), context.signal, timeoutSeconds * 1000);
+      waited = await callWithDeadline(
+        () =>
+          handle!.wait().catch((cause) => {
+            const result = commandResultFromError(cause);
+            if (result) return result;
+            throw cause;
+          }),
+        context.signal,
+        timeoutSeconds * 1000,
+      );
     } catch (cause) {
       throw providerError(
         this.binding.providerId,
@@ -1071,6 +1117,13 @@ class E2BResource implements Sandbox {
         context.signal,
         controlTimeoutMs,
       );
+      if (outcome.kind === "aborted" && context.signal.aborted)
+        throw providerError(
+          this.binding.providerId,
+          "readFile",
+          "cancelled",
+          "The sandbox file read was cancelled.",
+        );
       if (outcome.kind !== "value")
         throw uncertain(
           this.binding.providerId,
