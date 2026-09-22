@@ -15,11 +15,21 @@ export interface BrowserConfig {
   maxResponseBytes?: number;
   allowedHosts?: string[];
 }
-export interface BrowserPage { id: string; url: string; title?: string; text?: string; screenshot?: ProviderReference }
+export interface BrowserPage {
+  id: string;
+  url: string;
+  title?: string;
+  text?: string;
+  screenshot?: ProviderReference;
+}
 export interface BrowserClient extends AsyncDisposable {
   open(url: string, context: ProviderOperationContext): Promise<BrowserPage>;
   navigate(pageId: string, url: string, context: ProviderOperationContext): Promise<BrowserPage>;
-  extract(pageId: string, selector: string | undefined, context: ProviderOperationContext): Promise<string>;
+  extract(
+    pageId: string,
+    selector: string | undefined,
+    context: ProviderOperationContext,
+  ): Promise<string>;
   closePage(pageId: string, context: ProviderOperationContext): Promise<void>;
 }
 export interface BrowserDriver extends ProviderRegistration<BrowserConfig, BrowserClient> {

@@ -114,7 +114,9 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         return route.fulfill({
           status: 401,
           contentType: "application/json",
-          body: JSON.stringify({ error: { code: "unauthenticated", message: "Sign in required." } }),
+          body: JSON.stringify({
+            error: { code: "unauthenticated", message: "Sign in required." },
+          }),
         });
       return route.fulfill({ contentType: "application/json", body: envelope(session) });
     }
@@ -139,9 +141,15 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         contentType: "application/json",
         body: pageEnvelope(sent ? [userMessage] : []),
       });
-    if (path.endsWith(`/conversations/${conversation.id}/messages`) && request.method() === "POST") {
+    if (
+      path.endsWith(`/conversations/${conversation.id}/messages`) &&
+      request.method() === "POST"
+    ) {
       sent = true;
-      return route.fulfill({ contentType: "application/json", body: envelope({ message: userMessage }) });
+      return route.fulfill({
+        contentType: "application/json",
+        body: envelope({ message: userMessage }),
+      });
     }
     if (path.endsWith("/approvals") && request.method() === "GET")
       return route.fulfill({
@@ -192,7 +200,9 @@ test("shows workspace onboarding without inventing a workspace", async ({ page }
   await expect(page.getByText("Editorial Studio")).not.toBeVisible();
 });
 
-test("shows the sign-in screen after one bounded session failure and recovers", async ({ page }) => {
+test("shows the sign-in screen after one bounded session failure and recovers", async ({
+  page,
+}) => {
   let sessionRequests = 0;
   page.on("request", (request) => {
     if (request.url().endsWith("/api/v1/sessions/current")) sessionRequests += 1;
@@ -210,7 +220,10 @@ test("shows the sign-in screen after one bounded session failure and recovers", 
 test("creates a conversation and sends a message through the client contract", async ({ page }) => {
   await mockApi(page);
   await page.goto("/conversations");
-  await page.getByRole("main").getByRole("button", { name: /new conversation/i }).click();
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: /new conversation/i })
+    .click();
   await expect(page.getByRole("heading", { name: "A useful thread" })).toBeVisible();
   await page.getByRole("textbox", { name: "Message OpenMuse" }).fill("A test message");
   await page.getByRole("button", { name: /^send$/i }).click();

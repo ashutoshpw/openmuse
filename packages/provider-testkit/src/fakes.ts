@@ -23,13 +23,23 @@ import type {
 } from "@openmuse/provider-contracts";
 
 function schemaWithDefaults<T extends object>(defaults: T): ProviderConfigDefinition<T>["schema"] {
-  const parse = (input: unknown): T => ({ ...defaults, ...(input && typeof input === "object" ? input : {}) } as T);
-  return { parse, safeParse: (input: unknown) => ({ success: true as const, data: parse(input) }) } as ProviderConfigDefinition<T>["schema"];
+  const parse = (input: unknown): T =>
+    ({ ...defaults, ...(input && typeof input === "object" ? input : {}) }) as T;
+  return {
+    parse,
+    safeParse: (input: unknown) => ({ success: true as const, data: parse(input) }),
+  } as ProviderConfigDefinition<T>["schema"];
 }
 
-export const fakeModelConfigSchema = schemaWithDefaults<ModelConfig>({ defaultModel: "fake-model" });
+export const fakeModelConfigSchema = schemaWithDefaults<ModelConfig>({
+  defaultModel: "fake-model",
+});
 
-function metadata(module: "model" | "connector" | "notification", providerId: string, capabilities: readonly string[]): ProviderMetadata {
+function metadata(
+  module: "model" | "connector" | "notification",
+  providerId: string,
+  capabilities: readonly string[],
+): ProviderMetadata {
   return {
     providerId,
     displayName: `Fake ${module}`,
@@ -59,7 +69,10 @@ export function createFakeModelDriver(options: FakeModelOptions = {}): ModelDriv
     config: { version: "1", schema: fakeModelConfigSchema },
     async create(_config: ModelConfig, _context: ProviderCreateContext): Promise<ModelClient> {
       return {
-        async *generate(_request: ModelGenerateRequest, _context: ProviderOperationContext): AsyncIterable<ModelEvent> {
+        async *generate(
+          _request: ModelGenerateRequest,
+          _context: ProviderOperationContext,
+        ): AsyncIterable<ModelEvent> {
           for (const event of events) yield structuredClone(event);
         },
         async close() {
@@ -70,7 +83,9 @@ export function createFakeModelDriver(options: FakeModelOptions = {}): ModelDriv
   };
 }
 
-export const fakeConnectorConfigSchema = schemaWithDefaults<ConnectorConfig>({ accountId: "fake-account" });
+export const fakeConnectorConfigSchema = schemaWithDefaults<ConnectorConfig>({
+  accountId: "fake-account",
+});
 
 export interface FakeConnectorOptions {
   connection?: ConnectorConnectionState;
@@ -88,13 +103,25 @@ export function createFakeConnectorDriver(options: FakeConnectorOptions = {}): C
   return {
     module: "connector",
     providerId: "fake-connector",
-    metadata: metadata("connector", "fake-connector", ["connection.read", "operation.execute", "connection.revoke"]),
+    metadata: metadata("connector", "fake-connector", [
+      "connection.read",
+      "operation.execute",
+      "connection.revoke",
+    ]),
     config: { version: "1", schema: fakeConnectorConfigSchema },
-    async create(_config: ConnectorConfig, _context: ProviderCreateContext): Promise<ConnectorClient> {
+    async create(
+      _config: ConnectorConfig,
+      _context: ProviderCreateContext,
+    ): Promise<ConnectorClient> {
       return {
-        async getConnection() { return structuredClone(connection); },
+        async getConnection() {
+          return structuredClone(connection);
+        },
         async execute(_request: ConnectorOperationRequest, _context: ProviderOperationContext) {
-          return { data: structuredClone(options.result ?? { ok: true }), providerOperationId: "fake-operation-1" };
+          return {
+            data: structuredClone(options.result ?? { ok: true }),
+            providerOperationId: "fake-operation-1",
+          };
         },
         async revoke() {
           connection.status = "revoked";
@@ -106,18 +133,29 @@ export function createFakeConnectorDriver(options: FakeConnectorOptions = {}): C
   };
 }
 
-export const fakeNotificationConfigSchema = schemaWithDefaults<NotificationConfig>({ channel: "in_app" });
+export const fakeNotificationConfigSchema = schemaWithDefaults<NotificationConfig>({
+  channel: "in_app",
+});
 
-export function createFakeNotificationDriver(receipts: NotificationReceipt[] = []): NotificationDriver {
+export function createFakeNotificationDriver(
+  receipts: NotificationReceipt[] = [],
+): NotificationDriver {
   return {
     module: "notification",
     providerId: "fake-notification",
     metadata: metadata("notification", "fake-notification", ["send"]),
     config: { version: "1", schema: fakeNotificationConfigSchema },
-    async create(_config: NotificationConfig, _context: ProviderCreateContext): Promise<NotificationClient> {
+    async create(
+      _config: NotificationConfig,
+      _context: ProviderCreateContext,
+    ): Promise<NotificationClient> {
       return {
         async send(_request: NotificationSendRequest) {
-          const receipt = { accepted: true, providerMessageId: `message-${receipts.length + 1}`, acceptedAt: new Date(0).toISOString() };
+          const receipt = {
+            accepted: true,
+            providerMessageId: `message-${receipts.length + 1}`,
+            acceptedAt: new Date(0).toISOString(),
+          };
           receipts.push(receipt);
           return receipt;
         },
@@ -129,9 +167,15 @@ export function createFakeNotificationDriver(receipts: NotificationReceipt[] = [
 
 export class ManualClock {
   constructor(private current = new Date(0)) {}
-  now(): Date { return new Date(this.current); }
-  advance(milliseconds: number): void { this.current = new Date(this.current.getTime() + milliseconds); }
-  set(value: string | Date): void { this.current = new Date(value); }
+  now(): Date {
+    return new Date(this.current);
+  }
+  advance(milliseconds: number): void {
+    this.current = new Date(this.current.getTime() + milliseconds);
+  }
+  set(value: string | Date): void {
+    this.current = new Date(value);
+  }
 }
 
 export async function collectAsync<T>(items: AsyncIterable<T>): Promise<T[]> {

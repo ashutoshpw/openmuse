@@ -6,7 +6,10 @@ import type {
   ProviderRegistration,
 } from "./types.js";
 
-export interface ConnectorConfig { endpoint?: string; accountId?: string }
+export interface ConnectorConfig {
+  endpoint?: string;
+  accountId?: string;
+}
 export interface ConnectorConnectionState {
   connectionId: string;
   app: "gmail" | "calendar";
@@ -20,8 +23,14 @@ export interface ConnectorOperationRequest {
   input: Record<string, unknown>;
 }
 export interface ConnectorClient extends AsyncDisposable {
-  getConnection(connectionId: string, context: ProviderOperationContext): Promise<ConnectorConnectionState>;
-  execute(request: ConnectorOperationRequest, context: ProviderOperationContext): Promise<ProviderJsonResult>;
+  getConnection(
+    connectionId: string,
+    context: ProviderOperationContext,
+  ): Promise<ConnectorConnectionState>;
+  execute(
+    request: ConnectorOperationRequest,
+    context: ProviderOperationContext,
+  ): Promise<ProviderJsonResult>;
   revoke(connectionId: string, context: ProviderOperationContext): Promise<void>;
 }
 export interface ConnectorDriver extends ProviderRegistration<ConnectorConfig, ConnectorClient> {

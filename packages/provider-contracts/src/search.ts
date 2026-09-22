@@ -5,8 +5,16 @@ import type {
   ProviderRegistration,
 } from "./types.js";
 
-export interface SearchConfig { endpoint?: string; defaultIndex?: string }
-export interface SearchRequest { query: string; limit?: number; cursor?: string; domains?: string[]; }
+export interface SearchConfig {
+  endpoint?: string;
+  defaultIndex?: string;
+}
+export interface SearchRequest {
+  query: string;
+  limit?: number;
+  cursor?: string;
+  domains?: string[];
+}
 export interface SearchResult {
   id: string;
   title: string;
@@ -16,7 +24,12 @@ export interface SearchResult {
   source?: string;
   contentHash?: string;
 }
-export interface SearchResponse { results: SearchResult[]; nextCursor?: string; searchedAt: string; providerOperationId?: string }
+export interface SearchResponse {
+  results: SearchResult[];
+  nextCursor?: string;
+  searchedAt: string;
+  providerOperationId?: string;
+}
 export interface SearchClient extends AsyncDisposable {
   search(request: SearchRequest, context: ProviderOperationContext): Promise<SearchResponse>;
 }

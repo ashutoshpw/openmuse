@@ -5,13 +5,18 @@ export interface CronNextOccurrence {
   next(expression: string, after: Date, timezone: string): Date | undefined;
 }
 
-export function nextOccurrence(schedule: Schedule, after: Date, cron?: CronNextOccurrence): Date | undefined {
+export function nextOccurrence(
+  schedule: Schedule,
+  after: Date,
+  cron?: CronNextOccurrence,
+): Date | undefined {
   if (schedule.kind === "once") {
     const at = new Date(schedule.at);
     return at.getTime() > after.getTime() ? at : undefined;
   }
   if (schedule.kind === "interval") return new Date(after.getTime() + schedule.everySeconds * 1000);
-  if (!cron) throw new CoreError("cron_adapter_required", "A cron adapter is required for this schedule.");
+  if (!cron)
+    throw new CoreError("cron_adapter_required", "A cron adapter is required for this schedule.");
   return cron.next(schedule.expression, after, schedule.timezone);
 }
 
@@ -41,12 +46,27 @@ export class RunBudget {
 
   constructor(private readonly limits: RunBudgetLimits) {}
 
-  snapshot(): RunBudgetUsage { return { ...this.usage }; }
+  snapshot(): RunBudgetUsage {
+    return { ...this.usage };
+  }
 
   record(metric: keyof RunBudgetUsage, amount: number): void {
-    if (!Number.isFinite(amount) || amount < 0) throw new CoreError("invalid_budget_amount", "Budget amounts must be finite and non-negative.");
+    if (!Number.isFinite(amount) || amount < 0)
+      throw new CoreError(
+        "invalid_budget_amount",
+        "Budget amounts must be finite and non-negative.",
+      );
     this.usage[metric] += amount;
-    const limit = this.limits[metric === "durationMs" ? "maxDurationMs" : metric === "providerCalls" ? "maxProviderCalls" : metric === "outputBytes" ? "maxOutputBytes" : "maxChildRuns"];
+    const limit =
+      this.limits[
+        metric === "durationMs"
+          ? "maxDurationMs"
+          : metric === "providerCalls"
+            ? "maxProviderCalls"
+            : metric === "outputBytes"
+              ? "maxOutputBytes"
+              : "maxChildRuns"
+      ];
     if (limit !== undefined && this.usage[metric] > limit) throw new RunBudgetExceededError(metric);
   }
 }
