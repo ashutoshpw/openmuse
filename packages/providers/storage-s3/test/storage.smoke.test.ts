@@ -110,6 +110,7 @@ describe("S3 storage disposable MinIO integration", () => {
         const driver = createS3StorageDriver({
           trustedEndpoints: [endpoint],
           credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
+          trustedTargets: [{ endpoint, bucket }],
         });
         const createContext = {
           signal: new AbortController().signal,

@@ -37,12 +37,20 @@ describe("provider server composition", () => {
       tenantId: "tenant-1",
       workspaceId: "workspace-1",
       userId: "user-1",
+      secrets: {
+        resolve: async (reference) => `test-value-for-${reference}`,
+      },
     });
     await scope.resolve(
       "storage-instance-1",
       "storage",
       "s3",
-      { bucket: "review-bucket", endpoint: "https://objects.example.test/base" },
+      {
+        bucket: "review-bucket",
+        endpoint: "https://objects.example.test/base",
+        accessKeyIdSecret: "access-key-ref",
+        secretAccessKeySecret: "secret-key-ref",
+      },
       { configDigest: "s3-registration" },
     );
     await scope.close("test complete");

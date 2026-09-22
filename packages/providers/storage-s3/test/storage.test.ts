@@ -16,6 +16,7 @@ import {
   validateStorageContentType,
   validateStorageLogicalKey,
 } from "../src/index.js";
+import type { StorageS3DriverOptions } from "../src/index.js";
 
 const signal = new AbortController().signal;
 const context = {
@@ -26,6 +27,23 @@ const context = {
   userId: "user-1",
   providerInstanceId: "storage-instance-1",
 } as const;
+
+const runtimeCredentials = {
+  accessKeyId: "openmuse-test-access",
+  secretAccessKey: "openmuse-test-secret",
+} as const;
+
+function runtimeDriver(
+  bucket = "openmuse-test",
+  endpoint?: string,
+  options: Omit<StorageS3DriverOptions, "credentials" | "trustedTargets"> = {},
+) {
+  return createS3StorageDriver({
+    ...options,
+    credentials: runtimeCredentials,
+    trustedTargets: [{ bucket, ...(endpoint === undefined ? {} : { endpoint }) }],
+  });
+}
 
 function operation(operationId: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -54,7 +72,7 @@ function scopedObjectKey(): string {
 }
 
 function fakeS3(send: (command: unknown) => Promise<unknown>): S3Client {
-  return Object.assign(new S3Client({ region: "us-east-1" }), {
+  return Object.assign(new S3Client({ region: "us-east-1", credentials: runtimeCredentials }), {
     send,
     destroy() {},
   }) as S3Client;
@@ -73,6 +91,21 @@ describe("S3 storage policy", () => {
         bucket: "openmuse-test",
         maxObjectBytes: HARD_MAX_OBJECT_BYTES + 1,
       }),
+    ).toThrow();
+    expect(
+      storageConfigSchema.parse({
+        bucket: "openmuse-test",
+        accessKeyIdSecret: "access-key-ref",
+        secretAccessKeySecret: "secret-key-ref",
+        sessionTokenSecret: "session-ref",
+      }),
+    ).toMatchObject({
+      accessKeyIdSecret: "access-key-ref",
+      secretAccessKeySecret: "secret-key-ref",
+      sessionTokenSecret: "session-ref",
+    });
+    expect(() =>
+      storageConfigSchema.parse({ bucket: "openmuse-test", accessKeyIdSecret: "access-key-ref" }),
     ).toThrow();
   });
 
@@ -110,6 +143,152 @@ describe("S3 storage policy", () => {
         context,
       ),
     ).rejects.toMatchObject({ code: "permission_denied" });
+  });
+
+  it("does not construct an S3 client without BYOK or explicit trusted runtime credentials", async () => {
+    let constructed = false;
+    const driver = createS3StorageDriver({
+      clientFactory: () => {
+        constructed = true;
+        return fakeS3(async () => ({}));
+      },
+    });
+
+    await expect(driver.create({ bucket: "openmuse-test" }, context)).rejects.toMatchObject({
+      code: "authentication_required",
+    });
+    expect(constructed).toBe(false);
+  });
+
+  it("passes explicit runtime credentials only for an approved endpoint and bucket", async () => {
+    let receivedConfig: Record<string, unknown> | undefined;
+    const client = await runtimeDriver("openmuse-test", undefined, {
+      clientFactory: (config) => {
+        receivedConfig = config as Record<string, unknown>;
+        return fakeS3(async () => ({}));
+      },
+    }).create({ bucket: "openmuse-test" }, context);
+
+    expect(receivedConfig?.credentials).toEqual(runtimeCredentials);
+    await client.close();
+
+    let constructed = false;
+    const unapproved = createS3StorageDriver({
+      credentials: runtimeCredentials,
+      trustedTargets: [{ bucket: "approved-bucket" }],
+      clientFactory: () => {
+        constructed = true;
+        return fakeS3(async () => ({}));
+      },
+    });
+    await expect(unapproved.create({ bucket: "other-bucket" }, context)).rejects.toMatchObject({
+      code: "permission_denied",
+    });
+    expect(constructed).toBe(false);
+  });
+
+  it("resolves caller BYOK credentials and never falls back to runtime credentials", async () => {
+    const resolved = new Map([
+      ["access-key-ref", "caller-access"],
+      ["secret-key-ref", "caller-secret"],
+      ["session-ref", "caller-session"],
+    ]);
+    let receivedConfig: Record<string, unknown> | undefined;
+    const driver = createS3StorageDriver({
+      credentials: runtimeCredentials,
+      trustedTargets: [{ bucket: "openmuse-test" }],
+      clientFactory: (config) => {
+        receivedConfig = config as Record<string, unknown>;
+        return fakeS3(async () => ({}));
+      },
+    });
+    const client = await driver.create(
+      {
+        bucket: "openmuse-test",
+        accessKeyIdSecret: "access-key-ref",
+        secretAccessKeySecret: "secret-key-ref",
+        sessionTokenSecret: "session-ref",
+      },
+      {
+        ...context,
+        secrets: {
+          resolve: async (reference, signal) => {
+            expect(signal).toBe(context.signal);
+            const value = resolved.get(reference);
+            if (!value) throw new Error("unexpected secret reference");
+            return value;
+          },
+        },
+      },
+    );
+    expect(receivedConfig?.credentials).toEqual({
+      accessKeyId: "caller-access",
+      secretAccessKey: "caller-secret",
+      sessionToken: "caller-session",
+    });
+    await client.close();
+
+    let constructed = false;
+    const noResolver = createS3StorageDriver({
+      credentials: runtimeCredentials,
+      trustedTargets: [{ bucket: "openmuse-test" }],
+      clientFactory: () => {
+        constructed = true;
+        return fakeS3(async () => ({}));
+      },
+    });
+    await expect(
+      noResolver.create(
+        {
+          bucket: "openmuse-test",
+          accessKeyIdSecret: "access-key-ref",
+          secretAccessKeySecret: "secret-key-ref",
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ code: "authentication_required" });
+    expect(constructed).toBe(false);
+  });
+
+  it("does not expose caller secrets in provider errors or redacted config", async () => {
+    const secretValue = "caller-secret-value";
+    const driver = createS3StorageDriver({
+      clientFactory: () => fakeS3(async () => ({})),
+    });
+    const redacted = driver.config.redact?.({
+      bucket: "openmuse-test",
+      accessKeyIdSecret: "access-key-ref",
+      secretAccessKeySecret: "secret-key-ref",
+      sessionTokenSecret: "session-ref",
+    });
+    expect(JSON.stringify(redacted)).not.toContain("access-key-ref");
+    expect(JSON.stringify(redacted)).not.toContain("secret-key-ref");
+    expect(JSON.stringify(redacted)).not.toContain("session-ref");
+
+    let thrown: unknown;
+    try {
+      await driver.create(
+        {
+          bucket: "openmuse-test",
+          accessKeyIdSecret: "access-key-ref",
+          secretAccessKeySecret: "secret-key-ref",
+        },
+        {
+          ...context,
+          secrets: {
+            resolve: async () => {
+              throw new Error(secretValue);
+            },
+          },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "authentication_required" });
+    expect(String(thrown)).not.toContain(secretValue);
+    expect((thrown as { cause?: unknown }).cause).toBeUndefined();
+    expect((thrown as { details?: unknown }).details).toBeUndefined();
   });
 
   it("requires workspace and actor scope before constructing a client", async () => {
@@ -158,9 +337,7 @@ describe("S3 storage policy", () => {
   });
 
   it("uses workspace, actor, and instance as the canonical scope without a tenant", async () => {
-    const driver = createS3StorageDriver({
-      clientFactory: () => new S3Client({ region: "us-east-1" }),
-    });
+    const driver = runtimeDriver();
     const client = await driver.create(
       { bucket: "openmuse-test" },
       { ...context, tenantId: undefined },
@@ -169,9 +346,7 @@ describe("S3 storage policy", () => {
   });
 
   it("does not allow an operation to omit a bound tenant or switch actor", async () => {
-    const driver = createS3StorageDriver({
-      clientFactory: () => new S3Client({ region: "us-east-1" }),
-    });
+    const driver = runtimeDriver();
     const client = await driver.create({ bucket: "openmuse-test" }, context);
     const foreignKey = `openmuse/v1/${"a".repeat(43)}/${"b".repeat(43)}`;
     await expect(
@@ -231,7 +406,7 @@ describe("S3 storage policy", () => {
       }
       throw new Error("unexpected S3 command");
     });
-    const driver = createS3StorageDriver({ clientFactory: () => fake });
+    const driver = runtimeDriver("openmuse-test", undefined, { clientFactory: () => fake });
     const client = await driver.create({ bucket: "openmuse-test", maxObjectBytes: 3 }, context);
     const object = await client.put(
       { key: "bounded.txt", blob: { bytes, contentType: "text/plain" } },
@@ -260,7 +435,7 @@ describe("S3 storage policy", () => {
       }
       throw new Error("unexpected S3 command");
     });
-    const mismatchClient = await createS3StorageDriver({
+    const mismatchClient = await runtimeDriver("openmuse-test", undefined, {
       clientFactory: () => mismatch,
     }).create({ bucket: "openmuse-test", maxObjectBytes: 3 }, context);
     const mismatchObject = await mismatchClient.put(
@@ -276,7 +451,7 @@ describe("S3 storage policy", () => {
 
     const aborted = new AbortController();
     aborted.abort();
-    const abortClient = await createS3StorageDriver({
+    const abortClient = await runtimeDriver("openmuse-test", undefined, {
       clientFactory: () => fake,
     }).create({ bucket: "openmuse-test" }, context);
     await expect(
@@ -291,10 +466,9 @@ describe("S3 storage policy", () => {
       sends += 1;
       throw new Error("the pre-cancelled upload must not reach S3");
     });
-    const client = await createS3StorageDriver({ clientFactory: () => fake }).create(
-      { bucket: "openmuse-test" },
-      context,
-    );
+    const client = await runtimeDriver("openmuse-test", undefined, {
+      clientFactory: () => fake,
+    }).create({ bucket: "openmuse-test" }, context);
     const aborted = new AbortController();
     aborted.abort();
 
@@ -324,10 +498,9 @@ describe("S3 storage policy", () => {
         releasePut = resolve;
       });
     });
-    const client = await createS3StorageDriver({ clientFactory: () => fake }).create(
-      { bucket: "openmuse-test" },
-      context,
-    );
+    const client = await runtimeDriver("openmuse-test", undefined, {
+      clientFactory: () => fake,
+    }).create({ bucket: "openmuse-test" }, context);
     const controller = new AbortController();
     const pending = client.put(
       { key: "uncertain.txt", blob: { bytes: new Uint8Array([1]), contentType: "text/plain" } },
@@ -354,10 +527,9 @@ describe("S3 storage policy", () => {
         releaseDelete = resolve;
       });
     });
-    const client = await createS3StorageDriver({ clientFactory: () => fake }).create(
-      { bucket: "openmuse-test" },
-      context,
-    );
+    const client = await runtimeDriver("openmuse-test", undefined, {
+      clientFactory: () => fake,
+    }).create({ bucket: "openmuse-test" }, context);
     const objectKey = scopedObjectKey();
     const controller = new AbortController();
     const pending = client.delete(
@@ -415,10 +587,9 @@ describe("S3 storage policy", () => {
       }
       throw new Error("unexpected S3 command");
     });
-    const client = await createS3StorageDriver({ clientFactory: () => fake }).create(
-      { bucket: "openmuse-test" },
-      context,
-    );
+    const client = await runtimeDriver("openmuse-test", undefined, {
+      clientFactory: () => fake,
+    }).create({ bucket: "openmuse-test" }, context);
     const objectKey = scopedObjectKey();
     const controller = new AbortController();
     const pending = client.get(objectKey, operation("hung-get", { signal: controller.signal }));
@@ -450,10 +621,9 @@ describe("S3 storage policy", () => {
       }
       throw new Error("unexpected S3 command");
     });
-    const client = await createS3StorageDriver({ clientFactory: () => fake }).create(
-      { bucket: "openmuse-test" },
-      context,
-    );
+    const client = await runtimeDriver("openmuse-test", undefined, {
+      clientFactory: () => fake,
+    }).create({ bucket: "openmuse-test" }, context);
     await expect(client.get(scopedObjectKey(), operation("mime-mismatch"))).rejects.toMatchObject({
       code: "failed",
     });

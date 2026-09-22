@@ -41,6 +41,9 @@ export const storageConfigSchema = z
     endpoint: z.string().url().optional(),
     bucket: z.string().trim().min(1).max(255),
     region: z.string().trim().min(1).max(255).default("us-east-1"),
+    accessKeyIdSecret: z.string().trim().min(1).optional(),
+    secretAccessKeySecret: z.string().trim().min(1).optional(),
+    sessionTokenSecret: z.string().trim().min(1).optional(),
     maxObjectBytes: z
       .number()
       .int()
@@ -58,13 +61,43 @@ export const storageConfigSchema = z
       .max(256)
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((config, context) => {
+    const hasAccessKeyReference = config.accessKeyIdSecret !== undefined;
+    const hasSecretKeyReference = config.secretAccessKeySecret !== undefined;
+    if (hasAccessKeyReference !== hasSecretKeyReference) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [hasAccessKeyReference ? "secretAccessKeySecret" : "accessKeyIdSecret"],
+        message: "S3 accessKeyIdSecret and secretAccessKeySecret must be configured together",
+      });
+    }
+    if (config.sessionTokenSecret !== undefined && !hasAccessKeyReference) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sessionTokenSecret"],
+        message: "S3 sessionTokenSecret requires the access and secret key references",
+      });
+    }
+  });
+
+export interface StorageS3TrustedTarget {
+  /** Exact endpoint; omit for the AWS SDK's standard endpoint. */
+  endpoint?: string;
+  /** Exact bucket authorized for trusted runtime credentials. */
+  bucket: string;
+}
 
 export interface StorageS3DriverOptions {
   /** Exact custom endpoints approved by the deployment operator. */
   trustedEndpoints?: readonly string[];
-  /** Optional SDK credentials supplied by the trusted runtime, never user config. */
+  /**
+   * Explicit credentials supplied by a trusted runtime composition root. These
+   * are never read from provider config and require an exact target allowlist.
+   */
   credentials?: S3ClientConfig["credentials"];
+  /** Exact endpoint/bucket pairs authorized for the trusted runtime credentials. */
+  trustedTargets?: readonly StorageS3TrustedTarget[];
   /** Test/runtime seam; endpoint policy is still checked before this is called. */
   clientFactory?: (config: S3ClientConfig) => S3Client;
 }
@@ -189,6 +222,130 @@ function assertTrustedEndpoint(
     );
   }
   return candidate;
+}
+
+function trustedTargetKey(endpoint: string | undefined, bucket: string): string {
+  return `${endpoint ?? "<aws>"}\u0000${bucket}`;
+}
+
+function normalizeTrustedBucket(bucket: string): string {
+  if (typeof bucket !== "string") {
+    throw storageError(
+      "configure",
+      "invalid_request",
+      "The trusted storage bucket must be a string.",
+      "The trusted storage target is invalid.",
+    );
+  }
+  const normalized = bucket.trim();
+  if (!normalized || normalized !== bucket) {
+    throw storageError(
+      "configure",
+      "invalid_request",
+      "The trusted storage bucket must be non-empty and whitespace-free.",
+      "The trusted storage target is invalid.",
+    );
+  }
+  return normalized;
+}
+
+function assertTrustedTarget(
+  endpoint: string | undefined,
+  bucket: string,
+  trustedTargets: readonly StorageS3TrustedTarget[] | undefined,
+): void {
+  const candidate = trustedTargetKey(endpoint, bucket);
+  const trusted = new Set(
+    (trustedTargets ?? []).map((target) =>
+      trustedTargetKey(
+        target.endpoint === undefined ? undefined : normalizeTrustedEndpoint(target.endpoint),
+        normalizeTrustedBucket(target.bucket),
+      ),
+    ),
+  );
+  if (!trusted.has(candidate)) {
+    throw storageError(
+      "configure",
+      "permission_denied",
+      "The runtime S3 credentials are not authorized for this endpoint and bucket.",
+      "The storage target is not trusted.",
+    );
+  }
+}
+
+function configuredByok(config: StorageConfig): boolean {
+  return config.accessKeyIdSecret !== undefined || config.secretAccessKeySecret !== undefined;
+}
+
+async function resolveByokCredentials(
+  config: StorageConfig,
+  createContext: ProviderCreateContext,
+): Promise<NonNullable<S3ClientConfig["credentials"]>> {
+  if (!config.accessKeyIdSecret || !config.secretAccessKeySecret) {
+    throw storageError(
+      "authenticate",
+      "authentication_required",
+      "S3 access and secret key references must be configured together.",
+      "The storage provider is not configured.",
+    );
+  }
+  if (!createContext.secrets) {
+    throw storageError(
+      "authenticate",
+      "authentication_required",
+      "An S3 credential resolver is required for caller-owned credentials.",
+      "The storage provider is not configured.",
+    );
+  }
+  let accessKeyId: string;
+  let secretAccessKey: string;
+  let sessionToken: string | undefined;
+  try {
+    [accessKeyId, secretAccessKey] = await Promise.all([
+      createContext.secrets.resolve(config.accessKeyIdSecret, createContext.signal),
+      createContext.secrets.resolve(config.secretAccessKeySecret, createContext.signal),
+    ]);
+    if (config.sessionTokenSecret !== undefined) {
+      sessionToken = await createContext.secrets.resolve(
+        config.sessionTokenSecret,
+        createContext.signal,
+      );
+    }
+  } catch {
+    // Do not attach resolver errors: a vault implementation may include the
+    // resolved secret or secret-bearing provider details in its error.
+    if (createContext.signal.aborted)
+      throw storageError(
+        "authenticate",
+        "cancelled",
+        "The storage credential resolution was cancelled.",
+        "The storage operation was cancelled.",
+      );
+    throw storageError(
+      "authenticate",
+      "authentication_required",
+      "S3 credentials could not be resolved.",
+      "The storage provider is not configured.",
+    );
+  }
+  assertNotAborted(createContext.signal, "authenticate");
+  if (
+    !accessKeyId ||
+    !secretAccessKey ||
+    (config.sessionTokenSecret !== undefined && !sessionToken)
+  ) {
+    throw storageError(
+      "authenticate",
+      "authentication_required",
+      "S3 credentials are empty.",
+      "The storage provider is not configured.",
+    );
+  }
+  return {
+    accessKeyId,
+    secretAccessKey,
+    ...(sessionToken === undefined ? {} : { sessionToken }),
+  };
 }
 
 function scopeBinding(createContext: ProviderCreateContext): ScopeBinding {
@@ -732,21 +889,70 @@ export function createS3StorageDriver(options: StorageS3DriverOptions = {}): Sto
         { key: "storage.delete" },
         { key: "storage.download-url" },
       ],
-      requiredSecrets: [],
+      requiredSecrets: [
+        {
+          name: "accessKeyIdSecret",
+          description: "S3 access key ID credential reference",
+          required: true,
+        },
+        {
+          name: "secretAccessKeySecret",
+          description: "S3 secret access key credential reference",
+          required: true,
+        },
+        {
+          name: "sessionTokenSecret",
+          description: "Optional S3 session token credential reference",
+          required: false,
+        },
+      ],
       trusted: true,
     },
-    config: { version: "1", schema: storageConfigSchema },
+    config: {
+      version: "1",
+      schema: storageConfigSchema,
+      secretReferences: (config) =>
+        [config.accessKeyIdSecret, config.secretAccessKeySecret, config.sessionTokenSecret].filter(
+          (reference): reference is string => reference !== undefined,
+        ),
+      redact: (config) => ({
+        ...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
+        ...(config.bucket === undefined ? {} : { bucket: config.bucket }),
+        ...(config.region === undefined ? {} : { region: config.region }),
+        ...(config.maxObjectBytes === undefined ? {} : { maxObjectBytes: config.maxObjectBytes }),
+        ...(config.maxSignedUrlSeconds === undefined
+          ? {}
+          : { maxSignedUrlSeconds: config.maxSignedUrlSeconds }),
+        ...(config.allowedContentTypes === undefined
+          ? {}
+          : { allowedContentTypes: config.allowedContentTypes }),
+      }),
+    },
     async create(rawConfig: StorageConfig, createContext: ProviderCreateContext) {
       assertNotAborted(createContext.signal, "configure");
       const config = storageConfigSchema.parse(rawConfig);
       const endpoint = assertTrustedEndpoint(config.endpoint, options.trustedEndpoints);
       const binding = scopeBinding(createContext);
       const expectedScope = scopeDigest(binding);
+      const credentials = configuredByok(config)
+        ? await resolveByokCredentials(config, createContext)
+        : (() => {
+            if (options.credentials === undefined) {
+              throw storageError(
+                "authenticate",
+                "authentication_required",
+                "S3 credentials must come from the caller vault or a trusted runtime.",
+                "The storage provider is not configured.",
+              );
+            }
+            assertTrustedTarget(endpoint, config.bucket, options.trustedTargets);
+            return options.credentials;
+          })();
       const clientConfig: S3ClientConfig = {
         region: config.region,
         maxAttempts: 1,
         ...(endpoint === undefined ? {} : { endpoint, forcePathStyle: true }),
-        ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+        credentials,
       };
       const client = options.clientFactory
         ? options.clientFactory(clientConfig)

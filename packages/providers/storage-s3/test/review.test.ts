@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { ProviderCreateContext, ProviderOperationContext } from "@openmuse/provider-contracts";
 import { createS3StorageDriver } from "../src/index.js";
+import type { StorageS3DriverOptions } from "../src/index.js";
+
+const runtimeCredentials = {
+  accessKeyId: "openmuse-review-access",
+  secretAccessKey: "openmuse-review-secret",
+} as const;
 
 function createContext(overrides: Partial<ProviderCreateContext> = {}): ProviderCreateContext {
   return {
@@ -32,10 +38,22 @@ function fakeS3(send: (command: unknown) => Promise<unknown>): S3Client {
   return Object.assign(
     new S3Client({
       region: "us-east-1",
-      credentials: { accessKeyId: "review-access", secretAccessKey: "review-secret" },
+      credentials: runtimeCredentials,
     }),
     { send, destroy() {} },
   ) as S3Client;
+}
+
+function runtimeDriver(
+  bucket = "review-bucket",
+  endpoint?: string,
+  options: Omit<StorageS3DriverOptions, "credentials" | "trustedTargets"> = {},
+) {
+  return createS3StorageDriver({
+    ...options,
+    credentials: runtimeCredentials,
+    trustedTargets: [{ bucket, ...(endpoint === undefined ? {} : { endpoint }) }],
+  });
 }
 
 function scopedKey(suffix = "a".repeat(43)): string {
@@ -55,7 +73,7 @@ function scopedKey(suffix = "a".repeat(43)): string {
 describe("S3 storage independent review", () => {
   it("rejects missing or changed workspace, tenant, actor, and instance bindings", async () => {
     let sends = 0;
-    const client = await createS3StorageDriver({
+    const client = await runtimeDriver("review-bucket", undefined, {
       clientFactory: () =>
         fakeS3(async () => {
           sends += 1;
@@ -86,7 +104,7 @@ describe("S3 storage independent review", () => {
   });
 
   it("signs HTML and SVG downloads as octet-stream attachments", async () => {
-    const client = await createS3StorageDriver({
+    const client = await runtimeDriver("review-bucket", undefined, {
       clientFactory: () => fakeS3(async () => ({})),
     }).create({ bucket: "review-bucket", maxSignedUrlSeconds: 60 }, createContext());
 
@@ -105,7 +123,7 @@ describe("S3 storage independent review", () => {
   it("passes the trusted endpoint and bounded retry policy to the real AWS SDK client", async () => {
     let receivedConfig: Record<string, unknown> | undefined;
     const fake = fakeS3(async () => ({}));
-    const driver = createS3StorageDriver({
+    const driver = runtimeDriver("review-bucket", "https://objects.example.test/base", {
       trustedEndpoints: ["https://objects.example.test/base/"],
       clientFactory: (config) => {
         receivedConfig = config as Record<string, unknown>;

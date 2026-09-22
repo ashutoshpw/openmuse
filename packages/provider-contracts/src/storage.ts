@@ -10,6 +10,12 @@ export interface StorageConfig {
   endpoint?: string | undefined;
   bucket?: string | undefined;
   region?: string | undefined;
+  /** Credential-vault reference for the caller-owned S3 access key ID. */
+  accessKeyIdSecret?: string | undefined;
+  /** Credential-vault reference for the caller-owned S3 secret access key. */
+  secretAccessKeySecret?: string | undefined;
+  /** Optional credential-vault reference for a caller-owned session token. */
+  sessionTokenSecret?: string | undefined;
   maxObjectBytes?: number | undefined;
   maxSignedUrlSeconds?: number | undefined;
   /** Optional exact content-type allowlist enforced before upload. */
