@@ -19,6 +19,18 @@ const id = (name = "id") => text(name).notNull();
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 
+export type PersistedGoalSchedule =
+  | { kind: "once"; at: string }
+  | { kind: "interval"; everySeconds: number; timezone: string }
+  | { kind: "cron"; expression: string; timezone: string };
+
+export interface PersistedGoalConfig {
+  schedule: PersistedGoalSchedule | null;
+  connectionIds: string[];
+  memoryIds: string[];
+  approvalPolicyVersion: string;
+}
+
 export const users = pgTable(
   "users",
   {
@@ -395,12 +407,34 @@ export const goals = pgTable(
       .references(() => users.id, { onDelete: "restrict" }),
     title: text("title").notNull(),
     description: text("description"),
+    revision: integer("revision").notNull().default(1),
+    config: jsonb("config").$type<PersistedGoalConfig>().notNull().default({
+      schedule: null,
+      connectionIds: [],
+      memoryIds: [],
+      approvalPolicyVersion: "1",
+    }),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }),
     status: text("status").notNull().default("active"),
     progress: jsonb("progress").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [index("goals_workspace_status_idx").on(table.workspaceId, table.status)],
+  (table) => [
+    index("goals_workspace_status_idx").on(table.workspaceId, table.status),
+    index("goals_owner_updated_idx").on(
+      table.workspaceId,
+      table.createdBy,
+      table.updatedAt,
+      table.id,
+    ),
+    index("goals_due_owner_idx").on(
+      table.workspaceId,
+      table.createdBy,
+      table.status,
+      table.nextRunAt,
+    ),
+  ],
 );
 
 export const schedules = pgTable(

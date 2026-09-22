@@ -1,7 +1,8 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
-import type { ScopedDatabase } from "./context.js";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import type { DbTransaction, ScopedDatabase } from "./context.js";
 import {
   artifacts,
+  connections,
   conversations,
   goals,
   memories,
@@ -21,6 +22,10 @@ function forbidden(message: string): never {
   throw new RepositoryError(message, "forbidden");
 }
 
+function invalid(message: string): never {
+  throw new RepositoryError(message, "invalid");
+}
+
 function requireOwner<T extends { createdBy: string }>(row: T | undefined, actorId: string): T {
   if (!row) notFound("Resource");
   if (row.createdBy !== actorId) forbidden("Only the creator can modify this resource");
@@ -36,32 +41,41 @@ function asRecord(value: unknown): Record<string, unknown> {
 export interface GoalData {
   title: string;
   instructions: string;
-  schedule: unknown | null;
+  schedule:
+    | {
+        kind: "once";
+        at: string;
+      }
+    | {
+        kind: "interval";
+        everySeconds: number;
+        timezone: string;
+      }
+    | {
+        kind: "cron";
+        expression: string;
+        timezone: string;
+      }
+    | null;
   connectionIds: string[];
   memoryIds: string[];
   approvalPolicyVersion: string;
 }
 
 function goalData(row: typeof goals.$inferSelect): GoalData {
-  const progress = asRecord(row.progress);
+  const config = row.config;
   return {
     title: row.title,
     instructions: row.description ?? "",
-    schedule: progress.schedule ?? null,
-    connectionIds: Array.isArray(progress.connectionIds)
-      ? progress.connectionIds.filter((value): value is string => typeof value === "string")
-      : [],
-    memoryIds: Array.isArray(progress.memoryIds)
-      ? progress.memoryIds.filter((value): value is string => typeof value === "string")
-      : [],
-    approvalPolicyVersion:
-      typeof progress.approvalPolicyVersion === "string" ? progress.approvalPolicyVersion : "1",
+    schedule: config.schedule,
+    connectionIds: config.connectionIds,
+    memoryIds: config.memoryIds,
+    approvalPolicyVersion: config.approvalPolicyVersion,
   };
 }
 
-function withGoalData(data: GoalData, revision: number): Record<string, unknown> {
+function withGoalData(data: GoalData): typeof goals.$inferInsert.config {
   return {
-    revision,
     schedule: data.schedule,
     connectionIds: data.connectionIds,
     memoryIds: data.memoryIds,
@@ -76,14 +90,26 @@ export class GoalRepository {
     return this.scoped.scope;
   }
 
-  async list() {
-    return this.scoped.run((tx) =>
-      tx
+  async list(input: { limit: number; cursor?: number }) {
+    const offset = input.cursor ?? 0;
+    return this.scoped.run(async (tx) => {
+      const rows = await tx
         .select()
         .from(goals)
-        .where(eq(goals.workspaceId, this.scope.workspaceId))
-        .orderBy(desc(goals.updatedAt)),
-    );
+        .where(
+          and(
+            eq(goals.workspaceId, this.scope.workspaceId),
+            eq(goals.createdBy, this.scope.actorId),
+          ),
+        )
+        .orderBy(desc(goals.updatedAt), desc(goals.id))
+        .limit(input.limit + 1)
+        .offset(offset);
+      return {
+        items: rows.slice(0, input.limit),
+        hasMore: rows.length > input.limit,
+      };
+    });
   }
 
   async get(id: string) {
@@ -91,7 +117,13 @@ export class GoalRepository {
       const [row] = await tx
         .select()
         .from(goals)
-        .where(and(eq(goals.id, id), eq(goals.workspaceId, this.scope.workspaceId)))
+        .where(
+          and(
+            eq(goals.id, id),
+            eq(goals.workspaceId, this.scope.workspaceId),
+            eq(goals.createdBy, this.scope.actorId),
+          ),
+        )
         .limit(1);
       return row ?? notFound("Goal");
     });
@@ -99,6 +131,7 @@ export class GoalRepository {
 
   async create(input: { id?: string; data: GoalData; status?: string }) {
     return this.scoped.run(async (tx) => {
+      await this.assertReferences(tx, input.data);
       const [row] = await tx
         .insert(goals)
         .values({
@@ -108,7 +141,9 @@ export class GoalRepository {
           title: input.data.title,
           description: input.data.instructions,
           status: input.status ?? "draft",
-          progress: withGoalData(input.data, 1),
+          revision: 1,
+          config: withGoalData(input.data),
+          nextRunAt: null,
         })
         .returning();
       if (!row) throw new RepositoryError("Goal could not be created", "conflict");
@@ -121,10 +156,16 @@ export class GoalRepository {
       const [current] = await tx
         .select()
         .from(goals)
-        .where(and(eq(goals.id, id), eq(goals.workspaceId, this.scope.workspaceId)))
+        .where(
+          and(
+            eq(goals.id, id),
+            eq(goals.workspaceId, this.scope.workspaceId),
+            eq(goals.createdBy, this.scope.actorId),
+          ),
+        )
         .limit(1);
       requireOwner(current, this.scope.actorId);
-      const currentRevision = Number(asRecord(current.progress).revision ?? 1);
+      const currentRevision = current.revision;
       if (currentRevision !== input.expectedRevision)
         throw new RepositoryError("Goal was changed concurrently", "conflict");
       const currentData = goalData(current);
@@ -134,17 +175,28 @@ export class GoalRepository {
         connectionIds: input.data.connectionIds ?? currentData.connectionIds,
         memoryIds: input.data.memoryIds ?? currentData.memoryIds,
       };
+      await this.assertReferences(tx, nextData);
       const [updated] = await tx
         .update(goals)
         .set({
           title: nextData.title,
           description: nextData.instructions,
-          progress: withGoalData(nextData, currentRevision + 1),
+          revision: currentRevision + 1,
+          config: withGoalData(nextData),
+          nextRunAt: null,
           updatedAt: new Date(),
         })
-        .where(and(eq(goals.id, id), eq(goals.workspaceId, this.scope.workspaceId)))
+        .where(
+          and(
+            eq(goals.id, id),
+            eq(goals.workspaceId, this.scope.workspaceId),
+            eq(goals.createdBy, this.scope.actorId),
+            eq(goals.revision, currentRevision),
+          ),
+        )
         .returning();
-      return updated ?? notFound("Goal");
+      if (!updated) throw new RepositoryError("Goal was changed concurrently", "conflict");
+      return updated;
     });
   }
 
@@ -153,23 +205,76 @@ export class GoalRepository {
       const [current] = await tx
         .select()
         .from(goals)
-        .where(and(eq(goals.id, id), eq(goals.workspaceId, this.scope.workspaceId)))
+        .where(
+          and(
+            eq(goals.id, id),
+            eq(goals.workspaceId, this.scope.workspaceId),
+            eq(goals.createdBy, this.scope.actorId),
+          ),
+        )
         .limit(1);
       requireOwner(current, this.scope.actorId);
-      const currentRevision = Number(asRecord(current.progress).revision ?? 1);
+      const currentRevision = current.revision;
       if (currentRevision !== expectedRevision)
         throw new RepositoryError("Goal was changed concurrently", "conflict");
       const [updated] = await tx
         .update(goals)
         .set({
           status,
-          progress: { ...asRecord(current.progress), revision: currentRevision + 1 },
+          revision: currentRevision + 1,
+          nextRunAt: null,
           updatedAt: new Date(),
         })
-        .where(and(eq(goals.id, id), eq(goals.workspaceId, this.scope.workspaceId)))
+        .where(
+          and(
+            eq(goals.id, id),
+            eq(goals.workspaceId, this.scope.workspaceId),
+            eq(goals.createdBy, this.scope.actorId),
+            eq(goals.revision, currentRevision),
+          ),
+        )
         .returning();
-      return updated ?? notFound("Goal");
+      if (!updated) throw new RepositoryError("Goal was changed concurrently", "conflict");
+      return updated;
     });
+  }
+
+  private async assertReferences(tx: DbTransaction, data: GoalData): Promise<void> {
+    const connectionIds = [...new Set(data.connectionIds)];
+    if (connectionIds.length !== data.connectionIds.length)
+      invalid("Goal connection references must be unique");
+    if (connectionIds.length > 0) {
+      const rows = await tx
+        .select({ id: connections.id })
+        .from(connections)
+        .where(
+          and(
+            eq(connections.workspaceId, this.scope.workspaceId),
+            eq(connections.userId, this.scope.actorId),
+            inArray(connections.id, connectionIds),
+          ),
+        );
+      if (rows.length !== connectionIds.length)
+        forbidden("Goal connections must belong to the goal owner and workspace");
+    }
+    const memoryIds = [...new Set(data.memoryIds)];
+    if (memoryIds.length !== data.memoryIds.length)
+      invalid("Goal memory references must be unique");
+    if (memoryIds.length > 0) {
+      const rows = await tx
+        .select({ id: memories.id })
+        .from(memories)
+        .where(
+          and(
+            eq(memories.workspaceId, this.scope.workspaceId),
+            eq(memories.createdBy, this.scope.actorId),
+            isNull(memories.archivedAt),
+            inArray(memories.id, memoryIds),
+          ),
+        );
+      if (rows.length !== memoryIds.length)
+        forbidden("Goal memories must belong to the goal owner and workspace");
+    }
   }
 }
 

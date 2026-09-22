@@ -2,13 +2,19 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   createConversationInputSchema,
+  createGoalInputSchema,
   createWorkspaceInputSchema,
   cancelRunInputSchema,
+  changeGoalStatusInputSchema,
+  goalConfigSchema,
   listEventsInputSchema,
+  listInputSchema,
   sendMessageInputSchema,
+  updateGoalInputSchema,
   updateConversationInputSchema,
   updateWorkspaceInputSchema,
   type Conversation,
+  type Goal,
   type Message,
   type Run,
   type RunEvent,
@@ -26,8 +32,10 @@ import {
   RunRepository,
   ScopedDatabase,
   TaskRepository,
+  GoalRepository,
   WorkspaceRepository,
   artifacts,
+  type GoalData,
 } from "@openmuse/db";
 import type { ChatProviderSnapshot, ProviderBinding } from "@openmuse/db";
 
@@ -292,6 +300,28 @@ function toRun(row: Awaited<ReturnType<RunRepository["create"]>>): Run {
   };
 }
 
+function toGoal(row: Awaited<ReturnType<GoalRepository["get"]>>): Goal {
+  const config = goalConfigSchema.safeParse(row.config);
+  if (!config.success)
+    throw new ApplicationError("Stored goal configuration is invalid.", "internal", 500);
+  return {
+    id: row.id,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    workspaceId: row.workspaceId,
+    ownerUserId: row.createdBy,
+    title: row.title,
+    instructions: row.description ?? "",
+    revision: row.revision,
+    status: row.status as Goal["status"],
+    schedule: config.data.schedule,
+    nextRunAt: row.nextRunAt?.toISOString() ?? null,
+    connectionIds: config.data.connectionIds,
+    memoryIds: config.data.memoryIds,
+    approvalPolicyVersion: config.data.approvalPolicyVersion,
+  };
+}
+
 /**
  * The application service is the authenticated vertical slice shared by web,
  * native, and any future hosted API. Every instance is constructed with a
@@ -301,6 +331,7 @@ function toRun(row: Awaited<ReturnType<RunRepository["create"]>>): Run {
 export class OpenMuseApplication {
   readonly workspaces: WorkspaceRepository;
   readonly conversations: ConversationRepository;
+  readonly goals: GoalRepository;
   readonly tasks: TaskRepository;
   readonly runs: RunRepository;
   readonly approvals: ApprovalRepository;
@@ -311,6 +342,7 @@ export class OpenMuseApplication {
   ) {
     this.workspaces = new WorkspaceRepository(scoped);
     this.conversations = new ConversationRepository(scoped);
+    this.goals = new GoalRepository(scoped);
     this.tasks = new TaskRepository(scoped);
     this.runs = new RunRepository(scoped);
     this.approvals = new ApprovalRepository(scoped);
@@ -381,6 +413,94 @@ export class OpenMuseApplication {
   async listConversations(): Promise<Conversation[]> {
     try {
       return (await this.conversations.list()).map(toConversation);
+    } catch (error) {
+      throw mapRepositoryError(error);
+    }
+  }
+
+  async listGoals(input: unknown): Promise<{
+    items: Goal[];
+    page: { nextCursor: string | null; hasMore: boolean };
+  }> {
+    const parsed = listInputSchema.safeParse(input ?? {});
+    if (!parsed.success) throw new ApplicationError("Invalid goal query", "invalid_request", 400);
+    try {
+      await this.workspaces.getWithMembership();
+      const result = await this.goals.list({
+        limit: parsed.data.limit,
+        ...(parsed.data.cursor === undefined ? {} : { cursor: Number(parsed.data.cursor) }),
+      });
+      const nextCursor = result.hasMore
+        ? String((parsed.data.cursor ? Number(parsed.data.cursor) : 0) + parsed.data.limit)
+        : null;
+      return {
+        items: result.items.map(toGoal),
+        page: { nextCursor, hasMore: result.hasMore },
+      };
+    } catch (error) {
+      throw mapRepositoryError(error);
+    }
+  }
+
+  async getGoal(id: string): Promise<Goal> {
+    try {
+      return toGoal(await this.goals.get(id));
+    } catch (error) {
+      throw mapRepositoryError(error);
+    }
+  }
+
+  async createGoal(input: unknown): Promise<Goal> {
+    const parsed = createGoalInputSchema.safeParse(input);
+    if (!parsed.success || parsed.data.workspaceId !== this.scoped.scope.workspaceId)
+      throw new ApplicationError("Invalid goal input", "invalid_request", 400);
+    try {
+      await this.workspaces.getWithMembership();
+      const row = await this.goals.create({
+        data: {
+          title: parsed.data.title,
+          instructions: parsed.data.instructions,
+          schedule: parsed.data.schedule,
+          connectionIds: parsed.data.connectionIds,
+          memoryIds: parsed.data.memoryIds,
+          approvalPolicyVersion: "1",
+        },
+      });
+      return toGoal(row);
+    } catch (error) {
+      throw mapRepositoryError(error);
+    }
+  }
+
+  async updateGoal(id: string, input: unknown): Promise<Goal> {
+    const parsed = updateGoalInputSchema.safeParse(input);
+    if (!parsed.success) throw new ApplicationError("Invalid goal input", "invalid_request", 400);
+    try {
+      const data: Partial<GoalData> = {};
+      if (parsed.data.title !== undefined) data.title = parsed.data.title;
+      if (parsed.data.instructions !== undefined) data.instructions = parsed.data.instructions;
+      if (parsed.data.schedule !== undefined) data.schedule = parsed.data.schedule;
+      if (parsed.data.connectionIds !== undefined) data.connectionIds = parsed.data.connectionIds;
+      if (parsed.data.memoryIds !== undefined) data.memoryIds = parsed.data.memoryIds;
+      return toGoal(
+        await this.goals.update(id, {
+          expectedRevision: parsed.data.expectedRevision,
+          data,
+        }),
+      );
+    } catch (error) {
+      throw mapRepositoryError(error);
+    }
+  }
+
+  async changeGoalStatus(id: string, input: unknown): Promise<Goal> {
+    const parsed = changeGoalStatusInputSchema.safeParse(input);
+    if (!parsed.success)
+      throw new ApplicationError("Invalid goal status input", "invalid_request", 400);
+    try {
+      return toGoal(
+        await this.goals.changeStatus(id, parsed.data.status, parsed.data.expectedRevision),
+      );
     } catch (error) {
       throw mapRepositoryError(error);
     }

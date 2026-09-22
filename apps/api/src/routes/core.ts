@@ -93,6 +93,108 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
     }
   });
 
+  app.get("/api/v1/workspaces/:workspaceId/goals", async (c) => {
+    try {
+      return envelope(
+        c,
+        await service(c, options.db, c.req.param("workspaceId"), options.providerCatalog).listGoals(
+          {
+            ...(c.req.query("limit") === undefined ? {} : { limit: Number(c.req.query("limit")) }),
+            ...(c.req.query("cursor") === undefined ? {} : { cursor: c.req.query("cursor") }),
+          },
+        ),
+        request(c),
+      );
+    } catch (error) {
+      return jsonError(c, error, request(c));
+    }
+  });
+
+  app.post("/api/v1/goals", async (c) => {
+    try {
+      const body = await parseJson(c);
+      const workspaceId =
+        body && typeof body === "object" && !Array.isArray(body)
+          ? (body as { workspaceId?: unknown }).workspaceId
+          : undefined;
+      if (typeof workspaceId !== "string")
+        throw new ApplicationError("workspaceId is required", "invalid_request", 400);
+      return envelope(
+        c,
+        await service(c, options.db, workspaceId, options.providerCatalog).createGoal(body),
+        request(c),
+      );
+    } catch (error) {
+      return jsonError(c, error, request(c));
+    }
+  });
+
+  app.get("/api/v1/goals/:goalId", async (c) => {
+    try {
+      const goalId = c.req.param("goalId");
+      const workspaceId = await resolveResourceWorkspace(
+        options.db.db,
+        "goal",
+        goalId,
+        c.get("identity").userId,
+      );
+      if (!workspaceId) throw new ApplicationError("Goal not found", "not_found", 404);
+      return envelope(
+        c,
+        await service(c, options.db, workspaceId, options.providerCatalog).getGoal(goalId),
+        request(c),
+      );
+    } catch (error) {
+      return jsonError(c, error, request(c));
+    }
+  });
+
+  app.patch("/api/v1/goals/:goalId", async (c) => {
+    try {
+      const goalId = c.req.param("goalId");
+      const workspaceId = await resolveResourceWorkspace(
+        options.db.db,
+        "goal",
+        goalId,
+        c.get("identity").userId,
+      );
+      if (!workspaceId) throw new ApplicationError("Goal not found", "not_found", 404);
+      return envelope(
+        c,
+        await service(c, options.db, workspaceId, options.providerCatalog).updateGoal(
+          goalId,
+          await parseJson(c),
+        ),
+        request(c),
+      );
+    } catch (error) {
+      return jsonError(c, error, request(c));
+    }
+  });
+
+  app.post("/api/v1/goals/:goalId/status", async (c) => {
+    try {
+      const goalId = c.req.param("goalId");
+      const workspaceId = await resolveResourceWorkspace(
+        options.db.db,
+        "goal",
+        goalId,
+        c.get("identity").userId,
+      );
+      if (!workspaceId) throw new ApplicationError("Goal not found", "not_found", 404);
+      return envelope(
+        c,
+        await service(c, options.db, workspaceId, options.providerCatalog).changeGoalStatus(
+          goalId,
+          await parseJson(c),
+        ),
+        request(c),
+      );
+    } catch (error) {
+      return jsonError(c, error, request(c));
+    }
+  });
+
   app.post("/api/v1/conversations", async (c) => {
     try {
       const body = await parseJson(c);

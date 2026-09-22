@@ -4,4 +4,5 @@ export * from "./migrate.js";
 export * from "./repositories.js";
 export * from "./provider-repositories.js";
 export * from "./chat-repository.js";
+export * from "./resource-repositories.js";
 export * from "./schema.js";

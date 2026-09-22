@@ -241,6 +241,20 @@ export const scheduleSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/**
+ * Persisted goal configuration is deliberately separate from execution
+ * progress. It contains only validated references and policy metadata; the
+ * scheduler/worker boundary is not part of this CRUD slice.
+ */
+export const goalConfigSchema = z
+  .object({
+    schedule: scheduleSchema.nullable(),
+    connectionIds: z.array(idSchema).max(20),
+    memoryIds: z.array(idSchema).max(50),
+    approvalPolicyVersion: z.string().trim().min(1).max(64),
+  })
+  .strict();
+
 export const goalSchema = baseResourceSchema.extend({
   workspaceId: idSchema,
   ownerUserId: idSchema,
@@ -330,6 +344,7 @@ export type ProviderCapability = z.infer<typeof providerCapabilitySchema>;
 export type ProviderInstance = z.infer<typeof providerInstanceSchema>;
 export type ProviderCredential = z.infer<typeof providerCredentialSchema>;
 export type Schedule = z.infer<typeof scheduleSchema>;
+export type GoalConfig = z.infer<typeof goalConfigSchema>;
 export type Goal = z.infer<typeof goalSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type Memory = z.infer<typeof memorySchema>;

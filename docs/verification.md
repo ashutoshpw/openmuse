@@ -30,6 +30,14 @@ does not authenticate against a live service.
 fixture creates an isolated database and non-owner runtime/auth roles, applies
 migrations, seeds data, and drops the resources on completion.
 
+## Goal scheduling boundary
+
+Goal CRUD persists a validated schedule configuration and the typed
+`nextRunAt` field, but scheduled occurrence materialization, scheduler claims,
+worker execution, retries, and approval/tool continuation are not wired yet.
+A non-null goal schedule is metadata only in this slice; local API/client
+success must not be interpreted as background execution or delivery proof.
+
 ## PostgreSQL integration
 
 `bun run test:pg` requires `DATABASE_URL` for a non-owner runtime role and
