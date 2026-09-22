@@ -124,6 +124,39 @@ describe.skipIf(!integration)("OpenMuse API/auth PostgreSQL integration", () => 
     }
   });
 
+  it("does not deadlock first-user bootstrap with a single auth-pool connection", async () => {
+    const emptyHarness = await provisionIntegrationDatabase(undefined, {
+      seed: false,
+      ownerMaxConnections: 1,
+    });
+    try {
+      const bootstrap = createOpenMuseAuth(emptyHarness.owner, {
+        secret: authSecret,
+        baseURL: "http://localhost:8787",
+        trustedOrigins: [origin],
+        bootstrapToken: "openmuse-bootstrap-token",
+        secureCookies: false,
+        environment: "test",
+      });
+      const outcome = await Promise.race([
+        bootstrap
+          .bootstrapFirstUser({
+            token: "openmuse-bootstrap-token",
+            email: `single-${emptyHarness.databaseName}@example.test`,
+            password: harness.password,
+          })
+          .then((value) => ({ kind: "fulfilled" as const, value }))
+          .catch((error: unknown) => ({ kind: "rejected" as const, error })),
+        new Promise<{ kind: "timeout" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "timeout" }), 1_500),
+        ),
+      ]);
+      expect(outcome.kind).toBe("fulfilled");
+    } finally {
+      await emptyHarness.close();
+    }
+  });
+
   it("keeps the auth role unable to read tenant data even when it supplies tenant GUCs", async () => {
     const privileges = await Promise.all(
       tenantTables.map(async (table) => {

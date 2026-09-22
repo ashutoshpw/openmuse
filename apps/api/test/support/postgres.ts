@@ -34,6 +34,7 @@ export interface OpenMuseIntegrationHarness {
 
 export interface IntegrationDatabaseOptions {
   seed?: boolean;
+  ownerMaxConnections?: number;
 }
 
 /**
@@ -71,7 +72,11 @@ export async function provisionIntegrationDatabase(
     await admin.sql.unsafe(`create database ${identifier(databaseName)}`);
     databaseCreated = true;
 
-    owner = createDatabase({ url: ownerUrl, connectTimeoutSeconds: 5 });
+    owner = createDatabase({
+      url: ownerUrl,
+      maxConnections: options.ownerMaxConnections,
+      connectTimeoutSeconds: 5,
+    });
     await migrateDatabase(owner.sql, migrationDirectory);
 
     const markerRoles = await admin.sql<{ exists: boolean }[]>`
