@@ -331,7 +331,11 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       ) {
         headers.set("Content-Type", "application/json");
       }
-      const init: RequestInit = { method: requestOptions.method ?? "GET", headers };
+      const init: RequestInit = {
+        method: requestOptions.method ?? "GET",
+        headers,
+        redirect: "error",
+      };
       if (body !== undefined) init.body = body;
       if (timeout.signal !== undefined) init.signal = timeout.signal;
       const response = await options.fetch(
