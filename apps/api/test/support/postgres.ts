@@ -301,7 +301,7 @@ async function seedFixtures(
         (id, workspace_id, user_id, provider, credential_kind, encrypted_value, key_version, status, created_at, updated_at)
       values
         (${`credential-a-${ids.userA}`}, ${ids.workspace}, ${ids.userA}, 'fixture', 'api_key',
-          'encrypted-fixture-value', 1, 'active', ${now}, ${now})
+          'encrypted-fixture-value', 1, 'revoked', ${now}, ${now})
     `;
   });
 }

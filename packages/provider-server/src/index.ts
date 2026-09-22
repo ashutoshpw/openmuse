@@ -134,7 +134,6 @@ export class ProviderCatalog {
 const BUILTIN_ENDPOINTS: Record<string, string> = {
   "openai-compatible": "https://api.openai.com/v1",
   "meta-llama": "https://api.llama.com/compat/v1",
-  ollama: "http://127.0.0.1:11434",
 };
 
 function assertTrustedEndpoint(
@@ -182,6 +181,14 @@ export interface CredentialAad {
   revision: number;
 }
 
+/**
+ * The credential envelope currently has one supported key version. Key
+ * rotation must re-encrypt every credential under the replacement key before
+ * changing the deployment secret; a future envelope version requires a key
+ * ring and an explicit migration rather than silently trying the active key.
+ */
+export const SUPPORTED_CREDENTIAL_KEY_VERSION = 1;
+
 function aadString(aad: CredentialAad): string {
   return canonicalize({
     version: "v1",
@@ -210,7 +217,7 @@ export function encryptCredentialEnvelope(
   cipher.setAAD(Buffer.from(aadString(aad), "utf8"));
   const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   return [
-    "v1",
+    `v${SUPPORTED_CREDENTIAL_KEY_VERSION}`,
     iv.toString("base64url"),
     cipher.getAuthTag().toString("base64url"),
     ciphertext.toString("base64url"),
@@ -223,7 +230,7 @@ export function decryptCredentialEnvelope(
   aad: CredentialAad,
 ): string {
   const parts = envelope.split(".");
-  if (parts.length !== 4 || parts[0] !== "v1")
+  if (parts.length !== 4 || parts[0] !== `v${SUPPORTED_CREDENTIAL_KEY_VERSION}`)
     throw new Error("The provider credential has an unsupported encryption format");
   const iv = Buffer.from(parts[1]!.replace(/-/g, "+").replace(/_/g, "/"), "base64");
   const tag = Buffer.from(parts[2]!.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -407,9 +414,10 @@ export class WorkerProviderRuntime {
         return undefined;
       if (run.providerInstanceId !== payload.providerInstanceId && payload.providerInstanceId)
         throw new Error("The task provider does not match the pinned run");
-      const bindings = Array.isArray(run.providerCredentialBindings)
-        ? run.providerCredentialBindings.filter(isPinnedBinding)
-        : [];
+      const rawBindings = run.providerCredentialBindings;
+      const bindings = Array.isArray(rawBindings) ? rawBindings.filter(isPinnedBinding) : [];
+      if (!Array.isArray(rawBindings) || bindings.length !== rawBindings.length)
+        throw new Error("The pinned provider credential bindings are incomplete");
       if (
         !run.configDigest ||
         !run.providerBuildDigest ||
@@ -435,6 +443,15 @@ export class WorkerProviderRuntime {
       });
       if (expectedDigest !== run.configDigest)
         throw new Error("The pinned provider digest is invalid");
+      // Re-validate the stored endpoint at execution time. API-time catalog
+      // validation is not sufficient for legacy rows or direct DB writes, and
+      // loopback/private Ollama endpoints require an operator allowlist in
+      // both the API and worker environments.
+      this.catalog.normalizeConfig(
+        run.providerModule as ProviderModule,
+        run.providerId,
+        run.providerConfig,
+      );
       return {
         id: run.providerInstanceId,
         providerId: run.providerId,
@@ -556,6 +573,8 @@ class DatabaseSecretResolver implements ProviderSecretResolver {
       return rows[0];
     });
     if (!row) throw new Error("The provider credential was rotated or revoked");
+    if (row.keyVersion !== SUPPORTED_CREDENTIAL_KEY_VERSION)
+      throw new Error("The provider credential uses an unsupported encryption key version");
     return decryptCredentialEnvelope(row.encryptedValue, this.encryptionKey, {
       workspaceId: row.workspaceId,
       actorId: row.createdBy ?? row.userId ?? this.scoped.scope.actorId,
