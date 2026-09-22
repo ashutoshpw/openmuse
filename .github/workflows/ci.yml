@@ -152,7 +152,7 @@ jobs:
           SQL
       - name: Run PostgreSQL RLS smoke test
         run: bun run test:pg
-      - name: Run auth and RLS integration tests
+      - name: Run database integration tests
         run: bun run test:auth
 
   web:

@@ -27,7 +27,7 @@ requireText(rootVitest, '"**/*.native.spec.*"', "root Vitest exclusion");
 requireText(rootPackage.scripts?.test ?? "", "test:unit", "root test script");
 requireText(rootPackage.scripts?.["test:auth"] ?? "", "test-auth", "auth integration script");
 requireText(rootPackage.scripts?.["test:native"] ?? "", "test-native", "native test script");
-requireText(authRunner, "auth.integration.test.ts", "auth integration runner");
+requireText(authRunner, "*.integration.test.ts", "database integration runner");
 requireText(authRunner, "TEST_DATABASE_URL", "auth integration database guard");
 requireText(nativeRunner, "bun run test", "native test runner");
 requireText(rootPackage.scripts?.["test:web"] ?? "", "test-web", "web test script");
@@ -42,5 +42,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  "Test selection passed: unit, auth integration, native Jest, and web Playwright suites are separated.",
+  "Test selection passed: unit, database integration, native Jest, and web Playwright suites are separated.",
 );
