@@ -134,6 +134,8 @@ const configSchema = z
     apiKeySecret: z.string().trim().min(1),
     target: z.string().trim().min(1).optional(),
     snapshot: z.string().trim().min(1).optional(),
+    /** Alias matching the shared SandboxConfig vocabulary. */
+    image: z.string().trim().min(1).optional(),
     /** Empty allowlists are intentionally rejected by create(). */
     allowedSnapshots: z.array(z.string().trim().min(1)).max(100).default([]),
     maxLimits: limitsSchema.optional(),
@@ -173,6 +175,7 @@ interface DaytonaConfig extends SandboxConfig {
   apiKeySecret: string;
   target?: string;
   snapshot?: string;
+  image?: string;
   allowedSnapshots: string[];
   maxSeconds: number;
   maxFileBytes: number;
@@ -485,6 +488,7 @@ export function createDaytonaSandboxDriver(
           endpoint: config.endpoint,
           ...(config.target ? { target: config.target } : {}),
           ...(config.snapshot ? { snapshot: config.snapshot } : {}),
+          ...(config.image ? { image: config.image } : {}),
           allowedSnapshots: config.allowedSnapshots,
         };
       },
@@ -517,7 +521,10 @@ export function createDaytonaSandboxDriver(
           "Daytona requires a non-empty snapshot allowlist.",
           "The Daytona provider is not configured.",
         );
-      if (config.snapshot && !config.allowedSnapshots.includes(config.snapshot))
+      if (
+        (config.snapshot && !config.allowedSnapshots.includes(config.snapshot)) ||
+        (config.image && !config.allowedSnapshots.includes(config.image))
+      )
         throw providerError(
           providerId,
           "configure",
@@ -696,7 +703,7 @@ export function createDaytonaSandboxDriver(
               "The sandbox is not available in this workspace.",
             );
           const limits = mergeLimits(config, request, providerId);
-          const selectedImage = config.snapshot ?? request.image;
+          const selectedImage = config.snapshot ?? config.image ?? request.image;
           if (!selectedImage)
             throw providerError(
               providerId,
