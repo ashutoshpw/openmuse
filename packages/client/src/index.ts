@@ -92,6 +92,7 @@ export interface ApiClientOptions {
   baseUrl: string;
   fetch?: FetchLike;
   getAccessToken?: () => string | undefined | Promise<string | undefined>;
+  getWorkspaceId?: () => string | undefined | Promise<string | undefined>;
   onUnauthorized?: () => void;
 }
 
@@ -250,9 +251,11 @@ export function createApiClient(options: ApiClientOptions): OpenMuseClient {
     signal?: AbortSignal,
   ): Promise<T> {
     const token = await options.getAccessToken?.();
+    const workspaceId = (await options.getWorkspaceId?.())?.trim();
     const headers = new Headers({ Accept: "application/json" });
     if (body !== undefined) headers.set("Content-Type", "application/json");
     if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (workspaceId) headers.set("X-OpenMuse-Workspace", workspaceId);
     const response = await fetcher(`${root}${path}`, {
       method,
       headers,

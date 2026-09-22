@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Linking, StyleSheet } from "react-native";
+import { ApiClientError } from "@openmuse/client";
+import type { ProviderInstance } from "@openmuse/contracts";
 import {
   NativeBadge,
   NativeButton,
@@ -23,7 +25,18 @@ import {
 } from "../src/components/Screen";
 import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
 import type { ProviderConnection } from "../src/data/model";
-import { useWorkspace } from "../src/state";
+import { useSession, useWorkspace } from "../src/state";
+
+function connectionFromProvider(value: ProviderInstance): ProviderConnection {
+  return {
+    id: value.id,
+    provider: value.providerId,
+    label: value.displayName,
+    status: value.status === "available" ? "disconnected" : value.status,
+    scopes: value.capabilities.map((capability) => capability.key),
+    supportsByok: value.requiredSecrets.some((secret) => secret.required || secret.configured),
+  };
+}
 
 function ProviderCard({
   provider,
@@ -66,15 +79,23 @@ function ProviderCard({
 
 function ProvidersContent() {
   const apiPromise = useAuthenticatedApi();
+  const { session } = useSession();
   const { workspace } = useWorkspace();
-  const [catalog, setCatalog] = useState<ProviderConnection[]>([]);
+  const [catalog, setCatalog] = useState<ProviderInstance[]>([]);
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showByok, setShowByok] = useState(false);
   const [provider, setProvider] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderInstance | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [fieldVersion, setFieldVersion] = useState(0);
   const [saving, setSaving] = useState(false);
+
+  const clearSecret = useCallback(() => {
+    setApiKey("");
+    setFieldVersion((current) => current + 1);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
@@ -83,10 +104,10 @@ function ProvidersContent() {
       setLoading(true);
       setError(null);
       const [available, connected] = await Promise.all([
-        api.listProviders(workspace.id),
+        api.listProviderCatalog(workspace.id),
         api.listConnections(workspace.id),
       ]);
-      setCatalog(available.items);
+      setCatalog(available);
       setConnections(connected.items);
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "Unable to load provider connections.");
@@ -98,6 +119,13 @@ function ProvidersContent() {
   useEffect(() => {
     void Promise.resolve().then(() => refresh());
   }, [refresh]);
+
+  useEffect(() => {
+    clearSecret();
+    setProvider("");
+    setSelectedProvider(null);
+    setShowByok(false);
+  }, [clearSecret, session?.user.id, workspace?.id]);
 
   const connectApp = async (app: "gmail" | "calendar") => {
     if (!apiPromise || !workspace) return;
@@ -115,17 +143,46 @@ function ProvidersContent() {
 
   const saveByok = async () => {
     if (!apiPromise || !workspace || !provider.trim() || !apiKey) return;
+    const selected =
+      selectedProvider ?? catalog.find((item) => item.providerId === provider.trim()) ?? null;
+    if (!selected) {
+      setError("Select a provider from the server catalog before saving a key.");
+      clearSecret();
+      return;
+    }
+    const secretName = selected.requiredSecrets[0]?.name;
+    if (!secretName) {
+      setError("This provider does not accept a BYOK secret.");
+      clearSecret();
+      return;
+    }
     setSaving(true);
     try {
-      await (await apiPromise).connectProvider(workspace.id, provider.trim(), { apiKey });
+      await (
+        await apiPromise
+      ).saveProviderSetup(workspace.id, selected, {
+        secrets: { [secretName]: apiKey },
+      });
       setProvider("");
-      setApiKey("");
+      clearSecret();
+      setSelectedProvider(null);
       setShowByok(false);
       await refresh();
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to save this provider connection.");
+      if (cause instanceof ApiClientError && cause.status === 409) {
+        setError(
+          "Provider setup changed on the server. Review the refreshed provider and submit again if needed.",
+        );
+        setSelectedProvider(null);
+        await refresh();
+      } else {
+        setError(
+          cause instanceof Error ? cause.message : "Unable to save this provider connection.",
+        );
+      }
     } finally {
       setSaving(false);
+      clearSecret();
     }
   };
 
@@ -182,9 +239,10 @@ function ProvidersContent() {
       {catalog.map((item) => (
         <ProviderCard
           key={item.id}
-          provider={item}
+          provider={connectionFromProvider(item)}
           onConnect={() => {
-            setProvider(item.provider);
+            setProvider(item.providerId);
+            setSelectedProvider(item);
             setShowByok(true);
           }}
           onDisconnect={() => undefined}
@@ -201,22 +259,40 @@ function ProvidersContent() {
       <NativeButton
         label="Add a provider key (BYOK)"
         variant="text"
-        onPress={() => setShowByok(true)}
+        onPress={() => {
+          setProvider("");
+          setSelectedProvider(null);
+          clearSecret();
+          setShowByok(true);
+        }}
       />
-      <NativeSheet isPresented={showByok} onDismiss={() => setShowByok(false)}>
+      <NativeSheet
+        isPresented={showByok}
+        onDismiss={() => {
+          setShowByok(false);
+          clearSecret();
+          setSelectedProvider(null);
+        }}
+      >
         <NativeText variant="heading">Bring your own key</NativeText>
         <NativeText variant="caption" color={colors.mutedInk}>
           The key is sent to the server over your configured API connection. It is never rendered
           back into the app.
         </NativeText>
         <FieldLabel
+          key={`${selectedProvider?.id ?? "byok-provider"}-${fieldVersion}`}
           label="Provider id"
           placeholder="e.g. openai"
           autoCapitalize="none"
-          defaultValue={provider}
-          onChangeText={setProvider}
+          defaultValue={selectedProvider?.providerId ?? provider}
+          onChangeText={(value) => {
+            setProvider(value);
+            if (selectedProvider && value !== selectedProvider.providerId)
+              setSelectedProvider(null);
+          }}
         />
         <FieldLabel
+          key={`byok-secret-${fieldVersion}`}
           label="API key"
           placeholder="Paste a key"
           secureTextEntry

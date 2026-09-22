@@ -1,4 +1,4 @@
-import { createApiClient, type OpenMuseClient } from "@openmuse/client";
+import { ApiClientError, createApiClient, type OpenMuseClient } from "@openmuse/client";
 import type {
   Approval as ContractApproval,
   Artifact as ContractArtifact,
@@ -32,10 +32,12 @@ import type {
   Workspace,
 } from "./model";
 import { OpenMuseApiError } from "./model";
+import { saveProviderSetup as saveProviderSetupFlow } from "./provider-setup";
 
 export type ApiConfig = {
   baseUrl?: string | null;
   token?: string | null;
+  workspaceId?: string | null;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -298,26 +300,39 @@ function attachmentListFromRaw(value: unknown): ListResult<Attachment> {
 export class OpenMuseApi {
   readonly baseUrl: string;
   private readonly token: string | null;
+  readonly workspaceId: string | null;
   private readonly client: OpenMuseClient;
 
-  private constructor(baseUrl: string, token: string | null, client: OpenMuseClient) {
+  private constructor(
+    baseUrl: string,
+    token: string | null,
+    workspaceId: string | null,
+    client: OpenMuseClient,
+  ) {
     this.baseUrl = baseUrl;
     this.token = token;
+    this.workspaceId = workspaceId;
     this.client = client;
   }
 
   static create(config: ApiConfig = {}) {
     const baseUrl = (config.baseUrl ?? requireApiUrl()).replace(/\/$/, "");
     const token = config.token ?? null;
+    const workspaceId = config.workspaceId ?? null;
     const client = createApiClient({
       baseUrl,
       getAccessToken: () => token ?? undefined,
+      getWorkspaceId: () => workspaceId ?? undefined,
     });
-    return Promise.resolve(new OpenMuseApi(baseUrl, token, client));
+    return Promise.resolve(new OpenMuseApi(baseUrl, token, workspaceId, client));
   }
 
   withToken(token: string | null) {
-    return OpenMuseApi.create({ baseUrl: this.baseUrl, token });
+    return OpenMuseApi.create({ baseUrl: this.baseUrl, token, workspaceId: this.workspaceId });
+  }
+
+  withWorkspace(workspaceId: string | null) {
+    return OpenMuseApi.create({ baseUrl: this.baseUrl, token: this.token, workspaceId });
   }
 
   private async raw<T>(path: string, init: RequestInit, parse: (value: unknown) => T): Promise<T> {
@@ -327,6 +342,7 @@ export class OpenMuseApi {
     if (!(typeof FormData !== "undefined" && init.body instanceof FormData))
       headers.set("Content-Type", "application/json");
     if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    if (this.workspaceId) headers.set("X-OpenMuse-Workspace", this.workspaceId);
     if (init.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     let response: Response;
     try {
@@ -531,7 +547,8 @@ export class OpenMuseApi {
   }
 
   async listProviders(_workspaceId: string) {
-    const items = await this.client.listProviders({ includeUnavailable: true });
+    const scoped = await this.withWorkspace(_workspaceId);
+    const items = await scoped.client.listProviders({ includeUnavailable: true });
     return {
       items: items
         .filter((item) => item.workspaceId === null || item.workspaceId === _workspaceId)
@@ -539,34 +556,77 @@ export class OpenMuseApi {
     };
   }
 
+  /** Return the typed catalog and configured instances for provider setup UI. */
+  async listProviderCatalog(workspaceId: string) {
+    const scoped = await this.withWorkspace(workspaceId);
+    return (
+      await scoped.client.listProviders({
+        includeUnavailable: true,
+      })
+    ).filter((item) => item.workspaceId === null || item.workspaceId === workspaceId);
+  }
+
+  async listProviderInstances(workspaceId: string) {
+    const scoped = await this.withWorkspace(workspaceId);
+    return scoped.client.listProviderInstances({
+      includeUnavailable: true,
+    });
+  }
+
   async listConnections(workspaceId: string) {
     const result = await this.client.listConnections(workspaceId);
     return { ...page(result), items: result.items.map(connectionFromContract) };
   }
 
+  async saveProviderSetup(
+    workspaceId: string,
+    provider: ProviderInstance,
+    input: {
+      displayName?: string;
+      config?: Record<string, unknown>;
+      secrets?: Readonly<Record<string, string>>;
+    } = {},
+  ) {
+    const scoped = await this.withWorkspace(workspaceId);
+    try {
+      return await saveProviderSetupFlow({
+        api: scoped.client,
+        provider,
+        displayName: input.displayName,
+        config: input.config ?? {},
+        secrets: input.secrets ?? {},
+      });
+    } catch (error) {
+      // A CAS conflict means another actor changed the instance. Refresh the
+      // catalog for the caller, but never replay the write-only secret.
+      if (error instanceof ApiClientError && error.status === 409) {
+        await scoped.client.listProviders({ includeUnavailable: true }).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Compatibility wrapper for callers that only have a catalog provider id.
+   * It still uses the typed instance/credential flow; no legacy credential
+   * endpoint is available here.
+   */
   async connectProvider(
     workspaceId: string,
-    provider: string,
+    provider: string | ProviderInstance,
     input?: { apiKey?: string; redirectUri?: string },
   ) {
-    return this.raw(
-      `/api/v1/providers/${encodeURIComponent(provider)}/credentials`,
-      { method: "POST", body: JSON.stringify({ workspaceId, provider, ...input }) },
-      (value) => {
-        const item = unwrapEnvelope(value);
-        if (!isRecord(item))
-          throw new OpenMuseApiError(
-            "The server returned an invalid provider connection.",
-            "invalid",
-          );
-        return {
-          id: requiredString(item.id, "provider connection id"),
-          provider: requiredString(item.provider ?? provider, "provider id"),
-          label: requiredString(item.label ?? item.displayName ?? provider, "provider label"),
-          status: typeof item.status === "string" ? item.status : "connected",
-        };
-      },
-    );
+    const selected =
+      typeof provider === "string"
+        ? (await this.listProviderCatalog(workspaceId)).find(
+            (item) => item.providerId === provider || item.id === provider,
+          )
+        : provider;
+    if (!selected) throw new OpenMuseApiError("The selected provider is unavailable.", "invalid");
+    const firstSecret = selected.requiredSecrets[0]?.name;
+    return this.saveProviderSetup(workspaceId, selected, {
+      secrets: firstSecret && input?.apiKey ? { [firstSecret]: input.apiKey } : {},
+    });
   }
 
   async createProviderConnectionIntent(

@@ -1,5 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createApiClient, type OpenMuseClient } from "@openmuse/client";
 import type { Session, Workspace } from "@openmuse/contracts";
 
@@ -10,6 +19,7 @@ type AppContextValue = {
   signIn: (input: { email: string; password: string }) => Promise<void>;
   signOut: () => Promise<void>;
   retrySession: () => void;
+  setWorkspaceId: (workspaceId: string | undefined) => void;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -17,6 +27,10 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [isSignedOut, setIsSignedOut] = useState(false);
+  const workspaceIdRef = useRef<string | undefined>(undefined);
+  const setWorkspaceId = useCallback((workspaceId: string | undefined) => {
+    workspaceIdRef.current = workspaceId;
+  }, []);
   const baseUrl =
     (import.meta.env.VITE_OPENMUSE_API_URL as string | undefined)?.replace(/\/$/, "") ||
     window.location.origin;
@@ -38,6 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       // A successful sign-in may belong to a different account. Drop every
       // private query before asking the session query to repopulate it.
+      workspaceIdRef.current = undefined;
       queryClient.clear();
       setIsSignedOut(false);
     },
@@ -50,10 +65,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
     if (!response.ok && response.status !== 401)
       throw new Error("The session could not be closed.");
+    workspaceIdRef.current = undefined;
     queryClient.clear();
     setIsSignedOut(true);
   }, [baseUrl, queryClient]);
   const retrySession = useCallback(() => {
+    workspaceIdRef.current = undefined;
     queryClient.clear();
     setIsSignedOut(false);
   }, [queryClient]);
@@ -62,6 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createApiClient({
         baseUrl,
         fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
+        getWorkspaceId: () => workspaceIdRef.current,
         onUnauthorized: () => {
           // Do not invalidate `session` from its own 401 handler: that can
           // create an unbounded refetch loop. Clearing the cache also prevents
@@ -73,8 +91,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [baseUrl, queryClient],
   );
   const value = useMemo<AppContextValue>(
-    () => ({ api, baseUrl, isSignedOut, retrySession, signIn, signOut }),
-    [api, baseUrl, isSignedOut, retrySession, signIn, signOut],
+    () => ({
+      api,
+      baseUrl,
+      isSignedOut,
+      retrySession,
+      setWorkspaceId,
+      signIn,
+      signOut,
+    }),
+    [api, baseUrl, isSignedOut, retrySession, setWorkspaceId, signIn, signOut],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -118,7 +144,7 @@ export function WorkspaceProvider({
   session: Session;
   children: ReactNode;
 }) {
-  const { api } = useOpenMuse();
+  const { api, setWorkspaceId } = useOpenMuse();
   const queryClient = useQueryClient();
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const query = useQuery({
@@ -129,6 +155,11 @@ export function WorkspaceProvider({
   const workspaces = query.data?.items ?? EMPTY_WORKSPACES;
   const workspace =
     workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0] ?? null;
+
+  useLayoutEffect(() => {
+    setWorkspaceId(workspace?.id);
+    return () => setWorkspaceId(undefined);
+  }, [setWorkspaceId, workspace?.id]);
 
   const selectWorkspace = useCallback(
     (workspaceId: string) => setSelectedWorkspaceId(workspaceId),

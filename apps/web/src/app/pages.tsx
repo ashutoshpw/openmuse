@@ -16,8 +16,9 @@ import type {
   ProviderInstance,
   Schedule,
 } from "@openmuse/contracts";
+import { ApiClientError } from "@openmuse/client";
 import { Button, Badge, Card, EmptyState, Icon, IconButton, PageHeader } from "@openmuse/ui-web";
-import { useOpenMuse, useWorkspace } from "./context";
+import { useOpenMuse, useSessionQuery, useWorkspace } from "./context";
 import {
   formatBytes,
   formatDate,
@@ -27,6 +28,7 @@ import {
   providerTone,
   scheduleLabel,
 } from "./lib";
+import { saveProviderSetup } from "./provider-setup";
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -611,8 +613,9 @@ export function ConversationPage() {
     queryFn: () => api.listMessages(conversationId, { limit: 100 }),
   });
   const providersQuery = useQuery({
-    queryKey: ["providers", "model"],
+    queryKey: ["providers", "model", workspace?.id],
     queryFn: () => api.listProviders({ module: "model", includeUnavailable: true }),
+    enabled: Boolean(workspace),
   });
   const sendMutation = useMutation({
     mutationFn: () =>
@@ -1532,82 +1535,54 @@ function ProviderSetupPanel({
   onClose: () => void;
 }) {
   const { api } = useOpenMuse();
+  const sessionQuery = useSessionQuery();
+  const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
   const [displayName, setDisplayName] = useState(provider.displayName);
   const [endpoint, setEndpoint] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const existingInstance = provider.scope !== "system" && provider.workspaceId !== null;
+  useEffect(() => {
+    setSecrets({});
+  }, [sessionQuery.data?.id, workspace?.id]);
   const saveMutation = useMutation({
     mutationFn: async () => {
+      if (!workspace) throw new Error("Choose a workspace before configuring a provider.");
       const config = {
         ...(endpoint.trim() ? { endpoint: endpoint.trim() } : {}),
         ...(defaultModel.trim() ? { defaultModel: defaultModel.trim() } : {}),
       };
-      // Credentials are attached to a concrete instance. Create an empty
-      // workspace instance first when configuring a system catalogue entry,
-      // then rotate/write secrets against that instance before pinning its
-      // bindings and digest.
-      const target = existingInstance
-        ? provider
-        : await api.createProviderInstance({
-            providerId: provider.providerId,
-            module: provider.module,
-            scope: "workspace",
-            ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
-            config,
-            credentialBindings: [],
-          });
-      const credentials = await api.listProviderCredentials({
-        providerId: provider.providerId,
-        providerInstanceId: target.id,
-        scope: "workspace",
-        limit: 100,
-      });
-      const credentialBindings = (
-        await Promise.all(
-          provider.requiredSecrets.map(async (secret) => {
-            const current = credentials.items.find(
-              (credential) =>
-                credential.credentialKind === secret.name && credential.status === "active",
-            );
-            const value = secrets[secret.name]?.trim();
-            if (value) {
-              const saved = current
-                ? await api.updateProviderCredential(current.id, { secret: value })
-                : await api.createProviderCredential({
-                    providerId: provider.providerId,
-                    providerInstanceId: target.id,
-                    credentialKind: secret.name,
-                    scope: "workspace",
-                    secret: value,
-                  });
-              return { name: secret.name, credentialId: saved.id };
-            }
-            return current ? { name: secret.name, credentialId: current.id } : null;
-          }),
-        )
-      ).filter((binding): binding is { name: string; credentialId: string } => binding !== null);
-      return api.updateProviderInstance(target.id, {
-        ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
+      return saveProviderSetup({
+        api,
+        provider,
+        displayName,
         config,
-        credentialBindings,
-        expectedConfigDigest: target.configDigest,
+        secrets,
       });
     },
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["providers", "all"] }),
-        queryClient.invalidateQueries({ queryKey: ["providers", "model"] }),
+        queryClient.invalidateQueries({ queryKey: ["providers", "all", workspace?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["providers", "model", workspace?.id] }),
       ]);
       onClose();
+    },
+    onError: (error) => {
+      if (error instanceof ApiClientError && error.status === 409) {
+        setSecrets({});
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["providers", "all", workspace?.id] }),
+          queryClient.invalidateQueries({ queryKey: ["providers", "model", workspace?.id] }),
+        ]);
+      }
     },
     onSettled: () => setSecrets({}),
   });
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteProviderInstance(provider.id),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["providers", "all"] });
+      await queryClient.invalidateQueries({ queryKey: ["providers", "all", workspace?.id] });
       onClose();
     },
   });
@@ -1707,8 +1682,9 @@ export function SettingsPage() {
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
   const providersQuery = useQuery({
-    queryKey: ["providers", "all"],
+    queryKey: ["providers", "all", workspace?.id],
     queryFn: () => api.listProviders({ includeUnavailable: true }),
+    enabled: Boolean(workspace),
   });
   const memoriesQuery = useQuery({
     queryKey: ["memory", workspace?.id],
@@ -1725,6 +1701,9 @@ export function SettingsPage() {
     enabled: Boolean(workspace),
   });
   const [providerSetup, setProviderSetup] = useState<ProviderInstance | null>(null);
+  useEffect(() => {
+    setProviderSetup(null);
+  }, [workspace?.id]);
   const [memoryTitle, setMemoryTitle] = useState("");
   const [memoryContent, setMemoryContent] = useState("");
   const [memoryScope, setMemoryScope] = useState<"user" | "workspace">("user");

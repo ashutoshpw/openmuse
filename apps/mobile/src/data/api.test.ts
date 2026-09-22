@@ -31,11 +31,31 @@ describe("OpenMuseApi", () => {
   it("constructs the canonical client with a bearer-token provider", async () => {
     const client = { getCurrentSession: jest.fn() };
     createClientMock.mockReturnValue(client as never);
-    await OpenMuseApi.create({ baseUrl: "https://muse.example", token: "session-token" });
+    await OpenMuseApi.create({
+      baseUrl: "https://muse.example",
+      token: "session-token",
+      workspaceId: "workspace-1",
+    });
 
     const options = createClientMock.mock.calls[0]?.[0];
     expect(options?.baseUrl).toBe("https://muse.example");
     expect(options?.getAccessToken?.()).toBe("session-token");
+    expect(options?.getWorkspaceId?.()).toBe("workspace-1");
+  });
+
+  it("preserves the bearer token while switching workspace headers", async () => {
+    const client = { getCurrentSession: jest.fn() };
+    createClientMock.mockReturnValue(client as never);
+    const api = await OpenMuseApi.create({
+      baseUrl: "https://muse.example",
+      token: "session-token",
+      workspaceId: "workspace-1",
+    });
+
+    await api.withWorkspace("workspace-2");
+    const options = createClientMock.mock.calls[1]?.[0];
+    expect(options?.getAccessToken?.()).toBe("session-token");
+    expect(options?.getWorkspaceId?.()).toBe("workspace-2");
   });
 
   it("maps canonical message pages into transcript parts", async () => {
