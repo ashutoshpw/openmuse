@@ -1,0 +1,7 @@
+{
+  "extends": "../../packages/provider-contracts/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

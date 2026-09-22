@@ -75,6 +75,11 @@ export interface ProviderOperationContext {
   signal: AbortSignal;
   operationId: string;
   idempotencyKey?: string;
+  /** The tenant and workspace are repeated on operation contexts so providers
+   * can enforce ownership on reconnects and long-lived resources. */
+  tenantId?: string;
+  workspaceId?: string;
+  userId?: string;
 }
 
 export interface ProviderBlob {

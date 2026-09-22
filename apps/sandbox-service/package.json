@@ -1,0 +1,20 @@
+{
+  "name": "@openmuse/sandbox-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src"
+  },
+  "dependencies": {
+    "@openmuse/provider-sandbox-docker": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:testing",
+    "oxlint": "catalog:tooling",
+    "typescript": "catalog:tooling"
+  }
+}
