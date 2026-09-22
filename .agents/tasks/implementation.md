@@ -18,9 +18,22 @@ live.
 - [x] Add the web session/cache hardening, provider setup/share forms, and
       deterministic mocked Playwright coverage. Local evidence: 7 web tests,
       web typecheck/build, and visual desktop/mobile screenshots pass.
-- [x] Native Jest wrapper runs the current suite (5 tests pass locally).
+- [x] Native Jest wrapper runs the current committed suite (13 tests pass in
+      the exact `e311bd3` archive; this is not device or store evidence).
 - [x] Auth/RLS integration runner fails closed without `TEST_DATABASE_URL` and
       provisions disposable non-owner runtime and auth roles when configured.
+- [x] Provider setup now uses one compare-and-swap request for configuration
+      and write-only BYOK secrets; the web/mobile helpers trim and omit blank
+      values and never use the credential list/create/rotate flow.
+- [x] Provider atomic-setup safety coverage is accepted in `e58bfa9`: seven
+      focused integration tests and 74 assertions cover ownership, digest
+      fencing, secret redaction, and atomic credential/config persistence.
+- [x] Media provider review is accepted for the current Meta endpoint,
+      bounded provider responses, nested secret redaction, and explicit
+      provider-contract behavior. Remote provider capacity is not proven.
+- [x] Goal CRUD persists validated schedules and `nextRunAt` through the
+      typed API/client boundary. This is metadata/CRUD evidence only; durable
+      scheduler execution remains outstanding below.
 
 ## Launch scope still outstanding
 
@@ -29,12 +42,19 @@ live.
 - [ ] Prove deployed Better Auth cookie and bearer sessions, trusted origins,
       bootstrap behavior, revocation, and error redaction against the real API.
 - [ ] Complete and exercise workspace/resource CRUD, sharing resolution,
-      provider CRUD and credential rotation, artifact/media storage, and all
-      tenant authorization predicates through the HTTP boundary.
+      artifact/media storage, and all remaining tenant authorization predicates
+      through the HTTP boundary.
+- [x] Provider CRUD, encrypted write-only credential rotation, atomic BYOK
+      setup, config-digest concurrency, and provider ownership boundaries are
+      covered by the accepted local integration/review evidence. This does not
+      prove real-provider capacity or hosted deployment behavior.
 - [ ] Integrate the durable worker with lease fencing, retries, idempotency,
       provider execution, approval pauses, and observable failure recovery.
-- [ ] Define durable user goals, scheduler ownership, recurrence/time-zone
-      semantics, pause/resume, cancellation, retries, and delivery proof.
+- [x] Goal CRUD and validated schedule metadata are delivered as described
+      above.
+- [ ] Define and wire durable scheduler ownership, occurrence materialization,
+      recurrence/time-zone semantics, pause/resume, cancellation, retries, and
+      delivery proof; a non-null schedule is not yet background execution.
 - [ ] Complete approval/tool continuation state across worker restarts,
       including durable leases, actor-bound decisions, expiration, and resume
       audit evidence.
@@ -52,16 +72,26 @@ live.
 - [ ] Complete browser automation policy and runtime: default-deny network
       boundary, navigation/download limits, cancellation, ownership, and
       container-local egress proof.
+- [ ] Complete product onboarding and account/workspace handoff, including
+      first-run empty states, invitations, membership transitions, and
+      cross-tenant rejection at every client entry point.
+- [ ] Complete self-host launch operations: deployment topology, scoped secret
+      provisioning, health/readiness checks, upgrades, backup/restore,
+      rollback, observability, and capacity/runbook evidence.
 
 ### Security, data, and providers
 
-- [ ] Run the PostgreSQL smoke and auth/RLS integration lanes against CI's
-      disposable database and retain evidence for migration, runtime, worker,
-      and non-owner auth roles.
-- [ ] Verify provider ownership, encrypted write-only secrets, config-digest
-      concurrency, sandbox cancellation/deadlines, artifact limits, and
-      connector/model/search capability boundaries with real providers or
-      explicitly documented fakes.
+- [x] Run the PostgreSQL migration, smoke, and auth/RLS integration lanes in
+      the exact `e311bd3` archive against a disposable database with explicit
+      non-owner runtime/worker roles: 27 RLS tables, 33 integration tests, and
+      219 assertions passed. This is local sidecar evidence, not hosted CI.
+- [x] Verify provider ownership, encrypted write-only secrets, config-digest
+      concurrency, sandbox cancellation/deadlines, provider-level storage and
+      media bounds, and connector/model/search capability boundaries with
+      explicitly documented fakes and focused local tests. Artifact API
+      integration and real-provider capacity remain open.
+- [ ] Re-run and retain the PostgreSQL smoke/auth lanes in CI's disposable
+      environment and record the hosted result against the final SHA.
 - [ ] Exercise migration rollback/forward compatibility, backup/restore, data
       retention, and tenant-isolation failure paths before production use.
 
@@ -80,16 +110,16 @@ live.
       deadlines, and real Docker lifecycle smoke passed locally (10 focused
       tests and 2 Docker smoke tests). This is local-only evidence; it does
       not establish hosted deployment, provider capacity, or production proof.
-- [ ] S3-compatible storage provider local checkpoint: opaque workspace/actor
+- [x] S3-compatible storage provider local checkpoint: opaque workspace/actor
       and provider-instance keys, bounded put/get/head streams, SHA-256
       metadata verification, content-type policy, exact trusted endpoint
       allowlisting, short attachment download URLs, abort/uncertain-outcome
-      handling, and cleanup-safe MinIO lifecycle smoke are covered by 14
-      policy tests locally. The
-      isolated real MinIO smoke is pending CI validation. Independent review
-      and integration are pending. This is injected/local evidence only; no
-      remote bucket, app integration, sharing authorization, or hosted CI
-      proof is established.
+      handling, and cleanup-safe MinIO lifecycle smoke are covered by the
+      current 21 storage-policy tests and 27 independent-review checks. The
+      namespace-isolated SDK smoke passes, while host loopback publishing is
+      blocked by this environment. This is injected/local evidence only; no
+      remote bucket, artifact API integration, sharing authorization, or
+      hosted CI proof is established.
       On this host, Docker bridge publishing was separately diagnosed as a
       loopback TCP connection that accepts but never receives MinIO health
       bytes (docker0 172.17.0.0/16, published 127.0.0.1 port, DOCKER-USER
@@ -99,10 +129,15 @@ live.
       install, quality, format, lint, typecheck, unit, native Jest/export,
       PostgreSQL smoke plus auth integration, web Playwright, and aggregate
       gates from one exact committed SHA.
-- [x] Candidate clean archive from CI checkpoint commit (`923568b`, parent of
-      this documentation update) passed
-      frozen install, quality, unit, native Jest/export, build, and 7 web
-      Playwright tests; PostgreSQL was unavailable locally.
+- [x] Exact committed baseline archive `e311bd3` passed frozen install,
+      quality, format, lint, typecheck, 135 unit tests (3 skipped), native
+      Jest/export, build, 7 web Playwright tests, Docker smoke, PostgreSQL
+      migration/smoke, and 33 auth/RLS integration tests (219 assertions).
+      PostgreSQL ran in a Bun sidecar against a disposable database; this is
+      local evidence, not a final mobile-security or hosted-CI acceptance.
+- [ ] Re-run the full clean archive after the pending mobile workspace-race
+      remediation and `e58bfa9` delta, then freeze the final SHA for the
+      local release-review milestone.
 - [ ] Record the first hosted green `main` run. Remote run `35712766820` at
       `4a006da` failed before tests because `bun install --frozen-lockfile`
       detected a lockfile mismatch; it was not rerun or mutated.
