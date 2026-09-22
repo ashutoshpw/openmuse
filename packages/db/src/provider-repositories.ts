@@ -46,12 +46,11 @@ function invalid(message: string): never {
 }
 
 function requireActorOwnerOrAdmin(
-  row: { userId: string | null; createdBy: string },
+  row: { userId: string | null },
   actorId: string,
   canAdmin: boolean,
 ): void {
-  if (row.userId === actorId || (row.userId === null && canAdmin) || row.createdBy === actorId)
-    return;
+  if (row.userId === actorId || (row.userId === null && canAdmin)) return;
   forbidden("Provider instance administration is required");
 }
 
