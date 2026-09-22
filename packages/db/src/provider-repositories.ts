@@ -37,6 +37,8 @@ export interface ProviderInstanceSetupInput {
   expectedConfigDigest: string;
   config?: Record<string, unknown>;
   displayName?: string;
+  version?: string;
+  configVersion?: string;
   secrets: Readonly<Record<string, string>>;
   declaredSecretNames: readonly string[];
   buildConfig: (
