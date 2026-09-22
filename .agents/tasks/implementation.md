@@ -60,7 +60,8 @@ live.
       install, quality, format, lint, typecheck, unit, native Jest/export,
       PostgreSQL smoke plus auth integration, web Playwright, and aggregate
       gates from one exact committed SHA.
-- [x] Candidate clean archive from current committed HEAD (`91349f8`) passed
+- [x] Candidate clean archive from CI checkpoint commit (`923568b`, parent of
+      this documentation update) passed
       frozen install, quality, unit, native Jest/export, build, and 7 web
       Playwright tests; PostgreSQL was unavailable locally.
 - [ ] Record the first hosted green `main` run. Remote run `35712766820` at
