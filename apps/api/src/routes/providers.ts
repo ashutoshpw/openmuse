@@ -678,6 +678,7 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
       ...(parsed.data.displayName === undefined ? {} : { displayName: parsed.data.displayName }),
       version: entry.version,
       configVersion: entry.configVersion,
+      credentialKeyVersion: SUPPORTED_CREDENTIAL_KEY_VERSION,
       secrets: secretValues,
       declaredSecretNames: entry.requiredSecrets.map((secret) => secret.name),
       buildConfig: (currentConfig, requestedConfig, bindings) =>
@@ -1035,6 +1036,7 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
           expectedConfigDigest: instance.configDigest,
           version: entry.version,
           configVersion: entry.configVersion,
+          credentialKeyVersion: SUPPORTED_CREDENTIAL_KEY_VERSION,
           secrets: { [current.credentialKind]: parsed.data.secret },
           declaredSecretNames: entry.requiredSecrets.map((secret) => secret.name),
           buildConfig: (currentConfig, requestedConfig, bindings) =>

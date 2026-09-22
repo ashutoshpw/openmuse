@@ -39,6 +39,7 @@ export interface ProviderInstanceSetupInput {
   displayName?: string;
   version?: string;
   configVersion?: string;
+  credentialKeyVersion?: number;
   secrets: Readonly<Record<string, string>>;
   declaredSecretNames: readonly string[];
   buildConfig: (
@@ -368,7 +369,15 @@ export class ProviderInstanceRepository {
           const plan = plans.find((item) => item.id === binding.credentialId);
           const active = plan ? true : credential?.status === "active";
           const revision = plan?.revision ?? credential?.secretRevision;
-          if ((!plan && !credential) || !active || revision !== binding.revision)
+          const keyVersion = plan
+            ? (input.credentialKeyVersion ?? credential?.keyVersion)
+            : credential?.keyVersion;
+          if (
+            (!plan && !credential) ||
+            !active ||
+            revision !== binding.revision ||
+            (input.credentialKeyVersion !== undefined && keyVersion !== input.credentialKeyVersion)
+          )
             throw new RepositoryError(
               "Provider credentials must be configured before selecting a default provider",
               "conflict",
@@ -390,7 +399,7 @@ export class ProviderInstanceRepository {
             provider: current.providerId,
             credentialKind: plan.name,
             encryptedValue: plan.encryptedValue,
-            keyVersion: 1,
+            keyVersion: input.credentialKeyVersion ?? 1,
             secretRevision: plan.revision,
             status: "active",
           });
@@ -399,6 +408,9 @@ export class ProviderInstanceRepository {
             .update(providerCredentials)
             .set({
               encryptedValue: plan.encryptedValue,
+              ...(input.credentialKeyVersion === undefined
+                ? {}
+                : { keyVersion: input.credentialKeyVersion }),
               secretRevision: plan.revision,
               status: "active",
               updatedAt: new Date(),
