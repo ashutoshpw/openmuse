@@ -87,6 +87,7 @@ describe.skipIf(!integration)("OpenMuse bounded chat PostgreSQL integration", ()
     expect(applied.map((row) => row.version)).toContain("0007_chat_provider_pinning");
     expect(new Set(applied.map((row) => row.version)).size).toBe(applied.length);
     expect(applied.map((row) => row.version)).toContain("0008_chat_task_rls");
+    expect(applied.map((row) => row.version)).toContain("0010_provider_credential_binding_safety");
 
     const columns = await harness.owner.sql<{ table_name: string; column_name: string }[]>`
       select table_name, column_name
@@ -191,6 +192,82 @@ describe.skipIf(!integration)("OpenMuse bounded chat PostgreSQL integration", ()
     });
     expect(deterministic.isDefault).toBe(true);
     expect(deterministic.requiredSecrets).toEqual([]);
+  });
+
+  it("fails closed for unsupported credential versions and unbound legacy credentials", async () => {
+    const [safety] = await harness.owner.sql<
+      { active_orphans: string; orphan_constraint: boolean }[]
+    >`
+      select
+        (count(*) filter (where provider_instance_id is null and status <> 'revoked'))::text
+          as active_orphans,
+        exists (
+          select 1
+          from pg_constraint
+          where conname = 'provider_credentials_instance_required_check'
+            and conrelid = 'provider_credentials'::regclass
+        ) as orphan_constraint
+      from provider_credentials
+    `;
+    expect(safety).toEqual({ active_orphans: "0", orphan_constraint: true });
+
+    const legacyCredentialId = `legacy-active-orphan-${harness.databaseName}`;
+    let legacyInsertRejected = false;
+    try {
+      await harness.owner.sql`
+        insert into provider_credentials
+          (id, workspace_id, user_id, provider, credential_kind, encrypted_value, key_version, status)
+        values
+          (${legacyCredentialId}, ${harness.ids.workspace}, ${harness.ids.userA}, 'fixture', 'api_key',
+            'legacy-fixture-value', 1, 'active')
+      `;
+    } catch {
+      legacyInsertRejected = true;
+    }
+    expect(legacyInsertRejected).toBe(true);
+
+    const instance = await clientA.createProviderInstance({
+      providerId: "openai-compatible",
+      module: "model",
+      scope: "workspace",
+      displayName: "Unsupported credential version",
+      config: {},
+    });
+    const credential = await clientA.createProviderCredential({
+      providerId: "openai-compatible",
+      providerInstanceId: instance.id,
+      credentialKind: "apiKeySecret",
+      scope: "workspace",
+      secret: "unsupported-version-secret",
+    });
+    await harness.owner.sql`
+      update provider_credentials
+      set key_version = 99
+      where id = ${credential.id}
+    `;
+
+    const rotation = await api.request(
+      request(`/api/v1/provider-credentials/${credential.id}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bearerTokenA}`,
+          "Content-Type": "application/json",
+          Origin: origin,
+        },
+        body: JSON.stringify({ secret: "must-not-rotate" }),
+      }),
+    );
+    expect(rotation.status).toBe(409);
+    expect(await rotation.json()).toMatchObject({
+      error: { code: "conflict" },
+    });
+
+    const [stored] = await harness.owner.sql<{ key_version: number; secret_revision: number }[]>`
+      select key_version, secret_revision
+      from provider_credentials
+      where id = ${credential.id}
+    `;
+    expect(stored).toEqual({ key_version: 99, secret_revision: 1 });
   });
 
   it("atomically submits and executes a registered deterministic provider", async () => {
