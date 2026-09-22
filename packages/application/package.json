@@ -1,0 +1,20 @@
+{
+  "name": "@openmuse/application",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openmuse/contracts": "workspace:*",
+    "@openmuse/core": "workspace:*",
+    "@openmuse/db": "workspace:*",
+    "@openmuse/provider-contracts": "workspace:*",
+    "drizzle-orm": "catalog:backend",
+    "zod": "catalog:backend"
+  }
+}

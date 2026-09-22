@@ -2,7 +2,13 @@ import { z } from "zod";
 
 export const idSchema = z.string().trim().min(1).max(256);
 export const digestSchema = z.string().regex(/^[a-zA-Z0-9:_-]{8,256}$/);
-export const cursorSchema = z.string().max(2048).optional();
+/** Current API cursors are bounded numeric offsets/sequences, never opaque SQL fragments. */
+export const cursorSchema = z
+  .string()
+  .regex(/^(?:0|[1-9]\d*)$/, "Cursor must be a non-negative integer")
+  .max(16)
+  .refine((value) => Number.isSafeInteger(Number(value)), "Cursor is out of range")
+  .optional();
 
 /** ISO-8601 values are kept as strings at the transport boundary. */
 export const timestampSchema = z

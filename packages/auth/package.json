@@ -1,0 +1,20 @@
+{
+  "name": "@openmuse/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openmuse/db": "workspace:*",
+    "better-auth": "catalog:backend",
+    "drizzle-orm": "catalog:backend"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:testing"
+  }
+}

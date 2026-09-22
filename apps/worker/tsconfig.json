@@ -1,0 +1,7 @@
+{
+  "extends": "../../packages/db/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "bun"]
+  },
+  "include": ["src"]
+}

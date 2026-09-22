@@ -1,0 +1,30 @@
+{
+  "name": "@openmuse/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src"
+  },
+  "dependencies": {
+    "@openmuse/application": "workspace:*",
+    "@openmuse/contracts": "workspace:*",
+    "@openmuse/core": "workspace:*",
+    "@openmuse/db": "workspace:*",
+    "@openmuse/provider-connector-appconnect": "workspace:*",
+    "@openmuse/provider-contracts": "workspace:*",
+    "@openmuse/provider-model-meta": "workspace:*",
+    "@openmuse/provider-model-ollama": "workspace:*",
+    "@openmuse/provider-model-openai-compatible": "workspace:*",
+    "@openmuse/provider-search-exa": "workspace:*",
+    "@openmuse/provider-search-tavily": "workspace:*",
+    "drizzle-orm": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:testing",
+    "oxlint": "catalog:tooling"
+  }
+}
