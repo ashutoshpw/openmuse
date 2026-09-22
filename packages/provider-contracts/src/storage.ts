@@ -12,6 +12,8 @@ export interface StorageConfig {
   region?: string;
   maxObjectBytes?: number;
   maxSignedUrlSeconds?: number;
+  /** Optional exact content-type allowlist enforced before upload. */
+  allowedContentTypes?: string[];
 }
 export interface StoragePutRequest {
   key: string;
@@ -27,6 +29,7 @@ export interface StorageObject {
 }
 export interface StorageClient extends AsyncDisposable {
   put(request: StoragePutRequest, context: ProviderOperationContext): Promise<StorageObject>;
+  head(key: string, context: ProviderOperationContext): Promise<StorageObject>;
   get(key: string, context: ProviderOperationContext): Promise<ProviderBlob>;
   delete(key: string, context: ProviderOperationContext): Promise<void>;
   createDownloadUrl(

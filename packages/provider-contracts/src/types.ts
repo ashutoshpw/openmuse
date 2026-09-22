@@ -17,6 +17,8 @@ export interface ProviderSecretResolver {
 export interface ProviderCreateContext {
   signal: AbortSignal;
   scopeId: string;
+  /** Provider instance identity is injected by the registry when available. */
+  providerInstanceId?: string;
   tenantId?: string;
   workspaceId?: string;
   userId?: string;
@@ -75,6 +77,8 @@ export interface ProviderOperationContext {
   signal: AbortSignal;
   operationId: string;
   idempotencyKey?: string;
+  /** Optional repeat of the provider instance binding for operation auditing. */
+  providerInstanceId?: string;
   /** The tenant and workspace are repeated on operation contexts so providers
    * can enforce ownership on reconnects and long-lived resources. */
   tenantId?: string;

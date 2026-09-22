@@ -68,6 +68,33 @@ describe("core provider registry", () => {
     await scope.close();
   });
 
+  it("passes the resolved provider instance identity to provider creation", async () => {
+    const base = createFakeModelDriver();
+    let seen: string | undefined;
+    const driver = {
+      ...base,
+      async create(
+        config: Parameters<typeof base.create>[0],
+        context: Parameters<typeof base.create>[1],
+      ) {
+        seen = context.providerInstanceId;
+        return base.create(config, context);
+      },
+    };
+    const registry = new ProviderRegistry();
+    registry.register(driver);
+    const scope = registry.createScope();
+    await scope.resolve(
+      "instance-with-identity",
+      "model",
+      "fake-model",
+      { defaultModel: "fake-model" },
+      { configDigest: "identity" },
+    );
+    expect(seen).toBe("instance-with-identity");
+    await scope.close();
+  });
+
   it("allows a failed provider create to be retried", async () => {
     const base = createFakeModelDriver();
     let attempts = 0;

@@ -33,6 +33,25 @@ live.
       tenant authorization predicates through the HTTP boundary.
 - [ ] Integrate the durable worker with lease fencing, retries, idempotency,
       provider execution, approval pauses, and observable failure recovery.
+- [ ] Define durable user goals, scheduler ownership, recurrence/time-zone
+      semantics, pause/resume, cancellation, retries, and delivery proof.
+- [ ] Complete approval/tool continuation state across worker restarts,
+      including durable leases, actor-bound decisions, expiration, and resume
+      audit evidence.
+- [ ] Complete AppConnect connection lifecycle: link, callback ownership,
+      token exchange/refresh, revoke, expiry recovery, and per-user tool scope.
+- [ ] Add memory policy and storage boundaries: user/workspace/conversation
+      scope, retention/deletion, retrieval authorization, and prompt injection
+      defenses with adversarial tests.
+- [ ] Add immutable artifact/share records and recipient authorization in the
+      application layer; provider adapters must remain owner/workspace scoped.
+- [ ] Complete interruptible voice/realtime sessions with bounded audio,
+      cancellation, reconnect fencing, transcript ownership, and cleanup.
+- [ ] Complete invitation and membership lifecycle: issuance, expiry,
+      acceptance, revocation, role changes, and cross-tenant rejection.
+- [ ] Complete browser automation policy and runtime: default-deny network
+      boundary, navigation/download limits, cancellation, ownership, and
+      container-local egress proof.
 
 ### Security, data, and providers
 
@@ -61,6 +80,14 @@ live.
       deadlines, and real Docker lifecycle smoke passed locally (10 focused
       tests and 2 Docker smoke tests). This is local-only evidence; it does
       not establish hosted deployment, provider capacity, or production proof.
+- [ ] S3-compatible storage provider local checkpoint: opaque workspace/actor
+      and provider-instance keys, bounded put/get/head streams, SHA-256
+      metadata verification, content-type policy, exact trusted endpoint
+      allowlisting, short attachment download URLs, abort/uncertain-outcome
+      handling, and cleanup-safe MinIO lifecycle smoke passed locally (11
+      policy tests plus 1 real MinIO test); independent review and integration
+      are pending. This is injected/local evidence only; no remote bucket, app
+      integration, sharing authorization, or hosted CI proof is established.
 - [ ] Integrate peer changes without unrelated dirty files, then pass frozen
       install, quality, format, lint, typecheck, unit, native Jest/export,
       PostgreSQL smoke plus auth integration, web Playwright, and aggregate

@@ -219,6 +219,8 @@
         "@openmuse/provider-model-meta": "workspace:*",
         "@openmuse/provider-model-ollama": "workspace:*",
         "@openmuse/provider-model-openai-compatible": "workspace:*",
+        "@openmuse/provider-sandbox-daytona": "workspace:*",
+        "@openmuse/provider-sandbox-e2b": "workspace:*",
         "@openmuse/provider-search-exa": "workspace:*",
         "@openmuse/provider-search-tavily": "workspace:*",
         "drizzle-orm": "catalog:backend",
@@ -256,6 +258,18 @@
       "version": "0.1.0",
       "dependencies": {
         "@openmuse/provider-contracts": "workspace:*",
+      },
+      "devDependencies": {
+        "vitest": "catalog:testing",
+      },
+    },
+    "packages/providers/media-meta": {
+      "name": "@openmuse/provider-media-meta",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openmuse/provider-contracts": "workspace:*",
+        "@openmuse/provider-http": "workspace:*",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "vitest": "catalog:testing",
@@ -364,6 +378,19 @@
       "dependencies": {
         "@openmuse/provider-contracts": "workspace:*",
         "@openmuse/provider-http": "workspace:*",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "vitest": "catalog:testing",
+      },
+    },
+    "packages/providers/storage-s3": {
+      "name": "@openmuse/provider-storage-s3",
+      "version": "0.1.0",
+      "dependencies": {
+        "@aws-sdk/client-s3": "3.1137.0",
+        "@aws-sdk/s3-request-presigner": "3.1137.0",
+        "@openmuse/provider-contracts": "workspace:*",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -491,6 +518,8 @@
     "@aws-sdk/middleware-sdk-s3": ["@aws-sdk/middleware-sdk-s3@3.972.76", "", { "dependencies": { "@aws-sdk/core": "^3.978.0", "@aws-sdk/signature-v4-multi-region": "^3.996.46", "@aws-sdk/types": "^3.974.5", "@smithy/core": "^3.33.3", "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-NfnTkVUTBKTBuBgqaapFK9r3YdkKt1b2oRvgLzZq91bwNKh6ZS0S7sEcheguttREaL4iyfs/xQnqD7Z7AsWSsA=="],
 
     "@aws-sdk/nested-clients": ["@aws-sdk/nested-clients@3.997.45", "", { "dependencies": { "@aws-sdk/core": "^3.978.0", "@aws-sdk/signature-v4-multi-region": "^3.996.46", "@aws-sdk/types": "^3.974.5", "@smithy/core": "^3.33.3", "@smithy/fetch-http-handler": "^5.7.2", "@smithy/node-http-handler": "^4.11.3", "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-mooq9Q+jLa18VoM7HouczmslZU60iiB0aKc/Ztnq/luIL1ud0z4DnYprLR/ZO1gp331S9tJctM1HZr7u6YKBXQ=="],
+
+    "@aws-sdk/s3-request-presigner": ["@aws-sdk/s3-request-presigner@3.1137.0", "", { "dependencies": { "@aws-sdk/core": "^3.978.0", "@aws-sdk/signature-v4-multi-region": "^3.996.46", "@aws-sdk/types": "^3.974.5", "@smithy/core": "^3.33.3", "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-OJQwS0qt5fQMoZSccncZQBLLvSZ3Jw7Lo+E3MYBNNPRnUkvJxn5LeY246K+1QvoL9o8zHpYVPa7YgCL+zf+xtg=="],
 
     "@aws-sdk/signature-v4-multi-region": ["@aws-sdk/signature-v4-multi-region@3.996.46", "", { "dependencies": { "@aws-sdk/types": "^3.974.5", "@smithy/signature-v4": "^5.6.12", "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-L+2xZTye/2T96f3lwCws0Zw6GG2JHZW9e8FpVgGBeeExSKyeoZ6CWRpBml/7DNiK/O26jrgPM9F+Ay8VkgzUWQ=="],
 
@@ -920,6 +949,8 @@
 
     "@openmuse/provider-http": ["@openmuse/provider-http@workspace:packages/providers/http"],
 
+    "@openmuse/provider-media-meta": ["@openmuse/provider-media-meta@workspace:packages/providers/media-meta"],
+
     "@openmuse/provider-media-openai": ["@openmuse/provider-media-openai@workspace:packages/providers/media-openai"],
 
     "@openmuse/provider-model-meta": ["@openmuse/provider-model-meta@workspace:packages/providers/model-meta"],
@@ -939,6 +970,8 @@
     "@openmuse/provider-search-tavily": ["@openmuse/provider-search-tavily@workspace:packages/providers/search-tavily"],
 
     "@openmuse/provider-server": ["@openmuse/provider-server@workspace:packages/provider-server"],
+
+    "@openmuse/provider-storage-s3": ["@openmuse/provider-storage-s3@workspace:packages/providers/storage-s3"],
 
     "@openmuse/provider-testkit": ["@openmuse/provider-testkit@workspace:packages/provider-testkit"],
 

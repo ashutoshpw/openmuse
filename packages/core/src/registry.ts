@@ -226,7 +226,12 @@ export class ProviderRegistry {
           });
         instanceDefinitions.set(key, { module, providerId, configDigest });
         const parsed = parseConfig(registration.config, rawConfig);
-        const createContext: ProviderCreateContext = { ...context, signal: scopeSignal, scopeId };
+        const createContext: ProviderCreateContext = {
+          ...context,
+          signal: scopeSignal,
+          scopeId,
+          providerInstanceId,
+        };
         const instancePromise = Promise.resolve()
           .then(() => registration.create(parsed, createContext))
           .catch((error) => {

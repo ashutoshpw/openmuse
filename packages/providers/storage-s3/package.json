@@ -1,0 +1,22 @@
+{
+  "name": "@openmuse/provider-storage-s3",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1137.0",
+    "@aws-sdk/s3-request-presigner": "3.1137.0",
+    "@openmuse/provider-contracts": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "vitest": "catalog:testing"
+  }
+}
