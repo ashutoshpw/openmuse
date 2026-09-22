@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "node_modules/**",
+    ".turbo/**",
+    "dist/**",
+    "build/**",
+    ".next/**",
+    ".expo/**",
+    "coverage/**",
+    "ios/**",
+    "android/**"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  }
+}

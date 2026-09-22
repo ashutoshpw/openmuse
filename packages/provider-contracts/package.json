@@ -1,0 +1,16 @@
+{
+  "name": "@openmuse/provider-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openmuse/contracts": "workspace:*",
+    "zod": "catalog:"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@openmuse/provider-testkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openmuse/contracts": "workspace:*",
+    "@openmuse/provider-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "catalog:testing"
+  }
+}

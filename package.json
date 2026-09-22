@@ -1,0 +1,98 @@
+{
+  "name": "openmuse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/providers/*"
+  ],
+  "scripts": {
+    "lint": "oxlint . && turbo run lint",
+    "format:check": "oxfmt --check .",
+    "typecheck": "turbo run typecheck",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "turbo run build",
+    "check": "bun run lint && bun run format:check && bun run typecheck && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:testing",
+    "@types/node": "catalog:testing",
+    "oxfmt": "catalog:tooling",
+    "oxlint": "catalog:tooling",
+    "turbo": "catalog:tooling",
+    "typescript": "catalog:tooling",
+    "vitest": "catalog:testing"
+  },
+  "catalog": {
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "drizzle-orm": "0.45.3",
+    "postgres": "3.4.9",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "vitest": "5.0.1",
+    "zod": "4.6.5"
+  },
+  "catalogs": {
+    "backend": {
+      "@types/pg": "8.23.1",
+      "better-auth": "1.7.5",
+      "drizzle-kit": "0.31.11",
+      "drizzle-orm": "0.45.3",
+      "hono": "4.13.8",
+      "pg": "8.23.0",
+      "postgres": "3.4.9",
+      "zod": "4.6.5"
+    },
+    "frontend": {
+      "@tanstack/react-query": "5.103.2",
+      "@tanstack/react-router": "1.170.38",
+      "@tanstack/router-plugin": "1.168.40",
+      "@types/react": "19.2.2",
+      "@types/react-dom": "19.2.2",
+      "@vitejs/plugin-react": "6.1.1",
+      "react": "19.2.3",
+      "react-dom": "19.2.3",
+      "vite": "8.3.0"
+    },
+    "expo57": {
+      "@expo/metro-config": "57.0.12",
+      "@expo/metro-runtime": "57.0.16",
+      "@expo/ui": "57.0.19",
+      "babel-preset-expo": "57.0.12",
+      "expo": "57.0.24",
+      "expo-asset": "57.0.18",
+      "expo-build-properties": "57.0.21",
+      "expo-constants": "57.0.19",
+      "expo-dev-client": "57.0.19",
+      "expo-file-system": "57.0.7",
+      "expo-font": "57.0.4",
+      "expo-linking": "57.0.10",
+      "expo-router": "57.0.22",
+      "expo-splash-screen": "57.0.9",
+      "expo-status-bar": "57.0.1",
+      "expo-updates": "57.0.23",
+      "@types/react": "19.2.2",
+      "@types/react-dom": "19.2.2",
+      "react": "19.2.3",
+      "react-dom": "19.2.3",
+      "react-native": "0.86.3"
+    },
+    "testing": {
+      "@playwright/test": "1.63.0",
+      "@types/bun": "1.4.2",
+      "@types/node": "24.13.6",
+      "vitest": "5.0.1"
+    },
+    "tooling": {
+      "oxfmt": "0.70.0",
+      "oxlint": "1.85.0",
+      "turbo": "2.11.2",
+      "typescript": "7.0.2"
+    }
+  }
+}
