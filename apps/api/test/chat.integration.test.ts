@@ -425,7 +425,7 @@ describe.skipIf(!integration)("OpenMuse bounded chat PostgreSQL integration", ()
     const [deterministic] = await harness.owner.sql<{ id: string }[]>`
       select id
       from provider_instances
-      where provider_id = 'deterministic' and module = 'model'
+      where provider_id = 'deterministic' and module = 'model' and status = 'available'
       order by created_at desc
       limit 1
     `;

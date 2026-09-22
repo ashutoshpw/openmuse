@@ -421,13 +421,18 @@ async function resolveBindings(
     if (
       credential.provider !== providerId ||
       credential.providerInstanceId !== providerInstanceId ||
-      credential.credentialKind !== binding.name ||
-      credential.status !== "active"
+      credential.credentialKind !== binding.name
     )
       throw new ApplicationError(
         "Provider credentials must belong to the selected active instance",
         "forbidden",
         403,
+      );
+    if (credential.status !== "active")
+      throw new ApplicationError(
+        "Provider credential changed while the provider was being configured",
+        "conflict",
+        409,
       );
     resolved.push({
       name: binding.name,

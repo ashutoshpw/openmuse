@@ -1246,12 +1246,23 @@ export class RunRepository {
     error?: Record<string, unknown>,
   ) {
     return this.scoped.run(async (tx) => {
+      const persistedError =
+        error === undefined
+          ? undefined
+          : {
+              ...error,
+              retryable: typeof error.retryable === "boolean" ? error.retryable : false,
+              uncertain:
+                typeof error.uncertain === "boolean"
+                  ? error.uncertain
+                  : status === "outcome_unknown",
+            };
       const [run] = await tx
         .update(runs)
         .set({
           status,
           checkpoint,
-          error,
+          error: persistedError,
           startedAt: status === "running" ? new Date() : undefined,
           finishedAt: ["succeeded", "failed", "cancelled", "outcome_unknown"].includes(status)
             ? new Date()
