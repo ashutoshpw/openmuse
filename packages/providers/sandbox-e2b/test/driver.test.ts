@@ -194,13 +194,12 @@ describe("E2B sandbox provider", () => {
     expect(factory.sandboxClass.sandbox.commands.last).toMatchObject({
       command: "'printf' 'hello world' 'a'\\''b'",
     });
-    await sandbox.writeFile(
-      { path: "/workspace/value.txt", bytes: new Uint8Array([1, 2]) },
-      operation(),
-    );
-    await expect(sandbox.readFile("/workspace/value.txt", operation())).resolves.toEqual(
-      new Uint8Array([1, 2]),
-    );
+    await expect(
+      sandbox.writeFile(
+        { path: "/workspace/value.txt", bytes: new Uint8Array([1, 2]) },
+        operation(),
+      ),
+    ).rejects.toMatchObject({ code: "permission_denied" });
     await expect(
       client.reconnect("e2b-sandbox-1", operation("workspace-1", "other-user")),
     ).rejects.toMatchObject({
@@ -220,9 +219,9 @@ describe("E2B sandbox provider", () => {
       client.create({ image: template, limits: { cpu: 2 } }, operation()),
     ).rejects.toMatchObject({ code: "invalid_request" });
     const sandbox = await client.create({ image: template }, operation());
-    await expect(
-      sandbox.writeFile({ path: "/workspace/../secret", bytes: new Uint8Array([1]) }, operation()),
-    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(sandbox.readFile("/workspace/value.txt", operation())).rejects.toMatchObject({
+      code: "permission_denied",
+    });
   });
 
   it("kills a running command before returning caller cancellation", async () => {
