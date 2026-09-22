@@ -51,6 +51,11 @@ export interface HttpClient {
     parse: (value: unknown) => T | PromiseLike<T>,
   ): Promise<T>;
   bytes(options: HttpRequestOptions, context: HttpRequestContext): Promise<Uint8Array>;
+  readResponseBytes(
+    response: Response,
+    options: StreamOptions,
+    context: HttpRequestContext,
+  ): Promise<Uint8Array>;
   sse(
     response: Response,
     options: StreamOptions,
@@ -110,7 +115,8 @@ function timeoutSignal(
     controller.abort();
   }, timeoutMs);
   const abort = () => controller.abort();
-  parent?.addEventListener("abort", abort, { once: true });
+  if (parent?.aborted) controller.abort();
+  else parent?.addEventListener("abort", abort, { once: true });
   return {
     signal: controller.signal,
     timedOut: () => didTimeout,
@@ -239,20 +245,204 @@ async function* streamLines(
     });
   } finally {
     streamOptions.signal?.removeEventListener("abort", abortReader);
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
   }
+}
+
+async function readResponseBytes(
+  response: Response,
+  streamOptions: StreamOptions,
+  context: HttpRequestContext,
+): Promise<Uint8Array> {
+  const maxDurationMs = streamOptions.maxDurationMs;
+  const started = Date.now();
+  const timeoutError = () =>
+    providerError(
+      context,
+      "timeout",
+      "The provider response exceeded its time limit.",
+      "The provider request timed out.",
+    );
+  if (streamOptions.signal?.aborted)
+    throw providerError(
+      context,
+      "cancelled",
+      "The provider response was cancelled.",
+      "The provider request was cancelled.",
+    );
+  if (maxDurationMs !== undefined && maxDurationMs <= 0) throw timeoutError();
+  const contentLength = Number(response.headers.get("content-length"));
+  if (
+    streamOptions.maxBytes !== undefined &&
+    Number.isSafeInteger(contentLength) &&
+    contentLength > streamOptions.maxBytes
+  ) {
+    void response.body?.cancel().catch(() => undefined);
+    throw providerError(
+      context,
+      "failed",
+      "Provider response exceeded its size limit.",
+      "The provider response was too large.",
+    );
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  const maxBytes = streamOptions.maxBytes;
+  let totalBytes = 0;
+  let didAbort = false;
+  let didTimeout = false;
+  let didCancel = false;
+  let rejectAbort: ((reason: unknown) => void) | undefined;
+  const abortPromise =
+    streamOptions.signal === undefined
+      ? undefined
+      : new Promise<never>((_, reject) => {
+          rejectAbort = reject;
+        });
+  const cancelError = () =>
+    providerError(
+      context,
+      "cancelled",
+      "The provider response was cancelled.",
+      "The provider request was cancelled.",
+    );
+  const cancelReader = () => {
+    if (didCancel) return;
+    didCancel = true;
+    void reader.cancel().catch(() => undefined);
+  };
+  const abortReader = () => {
+    didAbort = true;
+    rejectAbort?.(cancelError());
+    cancelReader();
+  };
+  if (streamOptions.signal?.aborted) {
+    cancelReader();
+    throw cancelError();
+  }
+  streamOptions.signal?.addEventListener("abort", abortReader, { once: true });
+  try {
+    while (true) {
+      const read = reader.read();
+      const remaining =
+        maxDurationMs === undefined ? undefined : maxDurationMs - (Date.now() - started);
+      if (remaining !== undefined && remaining <= 0) throw timeoutError();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise =
+        remaining === undefined
+          ? undefined
+          : new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                didTimeout = true;
+                cancelReader();
+                reject(timeoutError());
+              }, remaining);
+            });
+      let result: ReadableStreamReadResult<Uint8Array<ArrayBufferLike>>;
+      try {
+        if (abortPromise === undefined && timeoutPromise === undefined) result = await read;
+        else if (timeoutPromise === undefined) result = await Promise.race([read, abortPromise!]);
+        else if (abortPromise === undefined) result = await Promise.race([read, timeoutPromise]);
+        else result = await Promise.race([read, abortPromise, timeoutPromise]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      if (didAbort || streamOptions.signal?.aborted) throw cancelError();
+      if (didTimeout) throw timeoutError();
+      if (result.done) break;
+      const chunk = result.value;
+      totalBytes += chunk.byteLength;
+      if (maxBytes !== undefined && totalBytes > maxBytes)
+        throw providerError(
+          context,
+          "failed",
+          "Provider response exceeded its size limit.",
+          "The provider response was too large.",
+        );
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    if (error instanceof ProviderOperationError) throw error;
+    if (didAbort || streamOptions.signal?.aborted || isAbort(error, streamOptions.signal))
+      throw cancelError();
+    if (didTimeout) throw timeoutError();
+    throw normalizeProviderError(error, {
+      providerId: context.providerId,
+      module: context.module,
+      operation: context.operation,
+    });
+  } finally {
+    streamOptions.signal?.removeEventListener("abort", abortReader);
+    cancelReader();
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function responseStreamOptions(
+  requestOptions: HttpRequestOptions,
+  defaultTimeoutMs: number | undefined,
+  started = Date.now(),
+): StreamOptions {
+  const options: StreamOptions = {};
+  if (requestOptions.signal !== undefined) options.signal = requestOptions.signal;
+  if (requestOptions.maxResponseBytes !== undefined)
+    options.maxBytes = requestOptions.maxResponseBytes;
+  const maxDurationMs = remainingDurationMs(started, requestOptions.timeoutMs ?? defaultTimeoutMs);
+  if (maxDurationMs !== undefined) options.maxDurationMs = maxDurationMs;
+  return options;
+}
+
+function makeStreamOptions(
+  signal: AbortSignal | undefined,
+  maxBytes: number | undefined,
+  maxDurationMs: number | undefined,
+): StreamOptions {
+  const options: StreamOptions = {};
+  if (signal !== undefined) options.signal = signal;
+  if (maxBytes !== undefined) options.maxBytes = maxBytes;
+  if (maxDurationMs !== undefined) options.maxDurationMs = maxDurationMs;
+  return options;
+}
+
+function remainingDurationMs(
+  started: number,
+  maxDurationMs: number | undefined,
+): number | undefined {
+  if (maxDurationMs === undefined) return undefined;
+  return maxDurationMs - (Date.now() - started);
 }
 
 async function responseDetails(
   response: Response,
+  streamOptions: StreamOptions,
+  context: HttpRequestContext,
 ): Promise<{ providerCode?: string; safeMessage?: string; details: JsonObject }> {
   const contentType = response.headers.get("content-type") ?? "";
+  let raw: string;
+  try {
+    const value = await readResponseBytes(
+      response,
+      { ...streamOptions, maxBytes: 16_384 },
+      context,
+    );
+    raw = contentType.includes("json") ? new TextDecoder().decode(value) : "";
+  } catch (error) {
+    if (
+      error instanceof ProviderOperationError &&
+      error.code === "failed" &&
+      error.safeMessage === "The provider response was too large."
+    )
+      raw = "";
+    else throw error;
+  }
   if (!contentType.includes("json")) return { details: { status: response.status } };
-  const raw = await response
-    .clone()
-    .text()
-    .then((value) => value.slice(0, 16_384))
-    .catch(() => "");
   const parsed = (() => {
     try {
       return JSON.parse(raw) as unknown;
@@ -309,10 +499,9 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
     requestOptions: HttpRequestOptions,
     context: HttpRequestContext,
   ): Promise<Response> {
-    const timeout = timeoutSignal(
-      requestOptions.signal,
-      requestOptions.timeoutMs ?? defaultTimeoutMs,
-    );
+    const started = Date.now();
+    const maxDurationMs = requestOptions.timeoutMs ?? defaultTimeoutMs;
+    const timeout = timeoutSignal(requestOptions.signal, maxDurationMs);
     try {
       const headers = new Headers(
         typeof options.headers === "function" ? await options.headers() : options.headers,
@@ -343,7 +532,11 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
         init,
       );
       if (!response.ok) {
-        const details = await responseDetails(response);
+        const details = await responseDetails(
+          response,
+          makeStreamOptions(timeout.signal, undefined, remainingDurationMs(started, maxDurationMs)),
+          context,
+        );
         const retryAfterValue = Number(response.headers.get("retry-after"));
         throw new ProviderOperationError({
           code: statusCode(response.status),
@@ -367,7 +560,6 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       }
       return response;
     } catch (error) {
-      if (error instanceof ProviderOperationError) throw error;
       if (timeout.timedOut()) {
         throw providerError(
           context,
@@ -376,6 +568,7 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
           "The provider request timed out.",
         );
       }
+      if (error instanceof ProviderOperationError) throw error;
       if (isAbort(error, timeout.signal ?? requestOptions.signal)) {
         throw providerError(
           context,
@@ -400,19 +593,14 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
     context: HttpRequestContext,
     parse: (value: unknown) => T | PromiseLike<T>,
   ): Promise<T> {
+    const started = Date.now();
     const response = await request(requestOptions, context);
-    const raw = await response.text().catch(() => "");
-    if (
-      requestOptions.maxResponseBytes !== undefined &&
-      new TextEncoder().encode(raw).byteLength > requestOptions.maxResponseBytes
-    ) {
-      throw providerError(
-        context,
-        "failed",
-        "Provider response exceeded its size limit.",
-        "The provider response was too large.",
-      );
-    }
+    const responseBytes = await readResponseBytes(
+      response,
+      responseStreamOptions(requestOptions, defaultTimeoutMs, started),
+      context,
+    );
+    const raw = new TextDecoder().decode(responseBytes);
     let value: unknown;
     try {
       value = raw.length === 0 ? undefined : JSON.parse(raw);
@@ -440,26 +628,20 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
     requestOptions: HttpRequestOptions,
     context: HttpRequestContext,
   ): Promise<Uint8Array> {
+    const started = Date.now();
     const response = await request(requestOptions, context);
-    const responseBytes = new Uint8Array(await response.arrayBuffer());
-    if (
-      requestOptions.maxResponseBytes !== undefined &&
-      responseBytes.byteLength > requestOptions.maxResponseBytes
-    ) {
-      throw providerError(
-        context,
-        "failed",
-        "Provider response exceeded its size limit.",
-        "The provider response was too large.",
-      );
-    }
-    return responseBytes;
+    return readResponseBytes(
+      response,
+      responseStreamOptions(requestOptions, defaultTimeoutMs, started),
+      context,
+    );
   }
 
   return {
     request,
     json,
     bytes,
+    readResponseBytes,
     sse: (response, streamOptions, context) => streamLines(response, streamOptions, context, "sse"),
     ndjson: (response, streamOptions, context) =>
       streamLines(response, streamOptions, context, "ndjson"),
@@ -507,7 +689,13 @@ export function toBase64(bytes: Uint8Array): string {
 }
 
 export function fromBase64(value: string): Uint8Array {
+  if (
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) ||
+    value.length === 0
+  )
+    throw new Error("The provider returned non-canonical base64 data.");
   const binary = atob(value);
+  if (btoa(binary) !== value) throw new Error("The provider returned non-canonical base64 data.");
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;

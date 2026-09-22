@@ -74,11 +74,7 @@ type StreamProbe = {
   started: Promise<void>;
 };
 
-function streamProbe(
-  body: Uint8Array,
-  contentType: string,
-  secondPull: "close" | "hang",
-): StreamProbe {
+function streamProbe(body: Uint8Array, contentType: string): StreamProbe {
   let pullCount = 0;
   let didCancel = false;
   let releasePull: (() => void) | undefined;
@@ -87,17 +83,13 @@ function streamProbe(
     resolveStarted = resolve;
   });
   const stream = new ReadableStream<Uint8Array>({
+    start(value) {
+      // Bun may pull once while constructing Response; keep that prefetch out of the read count.
+      value.enqueue(body);
+    },
     pull(value) {
       pullCount += 1;
-      if (pullCount === 1) {
-        value.enqueue(body);
-        return;
-      }
       resolveStarted?.();
-      if (secondPull === "close") {
-        value.close();
-        return;
-      }
       return new Promise<void>((resolve) => {
         releasePull = () => {
           value.close();
@@ -197,11 +189,7 @@ describe("Meta independent media regressions", () => {
 
   it("stops consuming oversized image and transcription responses at the configured limit", async () => {
     const maxResponseBytes = 16 * 1024;
-    const imageProbe = streamProbe(
-      new Uint8Array(maxResponseBytes + 1),
-      "application/json",
-      "close",
-    );
+    const imageProbe = streamProbe(new Uint8Array(maxResponseBytes + 1), "application/json");
     const imageDriver = createMetaImageDriver({ fetch: async () => imageProbe.response });
     const imageClient = await imageDriver.create(
       imageConfig(imageDriver, { maxResponseBytes }),
@@ -212,7 +200,7 @@ describe("Meta independent media regressions", () => {
       safeMessage: "The provider response was too large.",
     });
 
-    const sttProbe = streamProbe(new Uint8Array(maxResponseBytes + 1), "application/json", "close");
+    const sttProbe = streamProbe(new Uint8Array(maxResponseBytes + 1), "application/json");
     const sttDriver = createMetaSttDriver({ fetch: async () => sttProbe.response });
     const sttClient = await sttDriver.create(
       sttConfig(sttDriver, { maxResponseBytes }),
@@ -234,7 +222,7 @@ describe("Meta independent media regressions", () => {
   it("cancels a hanging JSON image body when the operation is aborted", async () => {
     const controller = new AbortController();
     const payload = new TextEncoder().encode(JSON.stringify({ data: [{ b64_json: "AQID" }] }));
-    const probe = streamProbe(payload, "application/json", "hang");
+    const probe = streamProbe(payload, "application/json");
     const driver = createMetaImageDriver({ fetch: async () => probe.response });
     const client = await driver.create(imageConfig(driver), createContext());
     const pending = client.generate({ prompt: "image" }, operation(controller.signal));

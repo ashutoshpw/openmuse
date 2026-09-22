@@ -52,6 +52,92 @@ describe("provider HTTP transport", () => {
     ).rejects.toMatchObject({ code: "failed", uncertain: false });
   });
 
+  it("bounds oversized error bodies before normalizing their status", async () => {
+    let cancelled = false;
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(32 * 1024));
+      },
+      pull() {
+        pulls += 1;
+        return new Promise<void>(() => undefined);
+      },
+      cancel() {
+        cancelled = true;
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const client = createHttpClient({
+      baseUrl: "https://provider.test",
+      fetch: async () =>
+        new Response(body, { status: 500, headers: { "content-type": "application/json" } }),
+    });
+
+    await expect(
+      client.request(
+        { path: "/error" },
+        { providerId: "test", module: "search", operation: "search" },
+      ),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    expect(pulls).toBe(1);
+    expect(cancelled).toBe(true);
+  });
+
+  it("does not await a stalled response cancellation after operation abort", async () => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => undefined);
+      },
+      cancel() {
+        cancelled = true;
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const client = createHttpClient({
+      baseUrl: "https://provider.test",
+      fetch: async () => new Response(body),
+    });
+    const pending = client.json(
+      { path: "/stall", signal: controller.signal },
+      { providerId: "test", module: "search", operation: "search" },
+      (value) => value,
+    );
+    setTimeout(() => controller.abort(), 10);
+
+    await expect(pending).rejects.toMatchObject({ code: "cancelled" });
+    expect(cancelled).toBe(true);
+  });
+
+  it("keeps the request deadline through a stalled response body", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => undefined);
+      },
+      cancel() {
+        cancelled = true;
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const client = createHttpClient({
+      baseUrl: "https://provider.test",
+      defaultTimeoutMs: 20,
+      fetch: async () => new Response(body),
+    });
+
+    await expect(
+      client.json(
+        { path: "/deadline" },
+        { providerId: "test", module: "search", operation: "search" },
+        (value) => value,
+      ),
+    ).rejects.toMatchObject({ code: "timeout" });
+    expect(cancelled).toBe(true);
+  });
+
   it("parses SSE data and honors cancellation", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

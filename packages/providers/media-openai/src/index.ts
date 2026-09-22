@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ProviderOperationError,
+  redactProviderDetails,
   type ImageClient,
   type ImageConfig,
   type ImageDriver,
@@ -197,6 +198,7 @@ function createAuthenticatedHttp(
   createContext: ProviderCreateContext,
   secretReference: string,
   module: ProviderModule,
+  secrets: Set<string>,
 ): HttpClient {
   return createHttpClient({
     baseUrl: endpoint,
@@ -206,8 +208,74 @@ function createAuthenticatedHttp(
       if (!createContext.secrets) throw missingSecret(module);
       const apiKey = await createContext.secrets.resolve(secretReference, createContext.signal);
       if (!apiKey) throw missingSecret(module);
+      secrets.add(apiKey);
       return { Authorization: `Bearer ${apiKey}` };
     },
+  });
+}
+
+function redactText(value: string, secrets: ReadonlySet<string>): string {
+  let redacted = value;
+  for (const secret of secrets) {
+    if (secret.length > 0) redacted = redacted.split(secret).join("[REDACTED]");
+  }
+  return redacted.length > 2048 ? `${redacted.slice(0, 2048)}…` : redacted;
+}
+
+function redactValue(value: unknown, secrets: ReadonlySet<string>): unknown {
+  if (typeof value === "string") return redactText(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, secrets));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, redactValue(child, secrets)]),
+    );
+  return value;
+}
+
+function redactError(
+  error: unknown,
+  secrets: ReadonlySet<string>,
+  module: ProviderModule,
+  operation: string,
+): ProviderOperationError {
+  if (error instanceof ProviderOperationError) {
+    return new ProviderOperationError({
+      code: error.code,
+      message: redactText(error.message, secrets),
+      safeMessage: redactText(error.safeMessage, secrets),
+      retryable: error.retryable,
+      uncertain: error.uncertain,
+      providerId: error.providerId ?? providerId,
+      module: error.module ?? module,
+      operation: error.operation ?? operation,
+      ...(error.providerCode === undefined
+        ? {}
+        : { providerCode: redactText(error.providerCode, secrets) }),
+      ...(error.retryAfterSeconds === undefined
+        ? {}
+        : { retryAfterSeconds: error.retryAfterSeconds }),
+      ...(error.details === undefined
+        ? {}
+        : {
+            details: redactProviderDetails(redactValue(error.details, secrets)) as Record<
+              string,
+              never
+            >,
+          }),
+    });
+  }
+  return new ProviderOperationError({
+    code: "failed",
+    message: redactText(
+      error instanceof Error ? error.message : "Provider operation failed",
+      secrets,
+    ),
+    safeMessage: "The provider operation could not be completed.",
+    retryable: false,
+    uncertain: false,
+    providerId,
+    module,
+    operation,
   });
 }
 
@@ -324,6 +392,11 @@ async function resolveAudio(
   return blob;
 }
 
+function audioContentType(contentType: string): boolean {
+  const normalized = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return normalized?.startsWith("audio/") ?? false;
+}
+
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -404,18 +477,33 @@ function parseTranscriptValue(
 
 async function boundedText(
   response: Response,
+  http: HttpClient,
   maxResponseBytes: number,
+  signal: AbortSignal,
+  maxDurationMs: number,
   module: ProviderModule,
 ): Promise<string> {
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > maxResponseBytes)
-    throw invalid(
-      module,
-      "transcribe",
-      "Provider response exceeded its size limit.",
-      "The provider response was too large.",
+  try {
+    const bytes = await http.readResponseBytes(
+      response,
+      { signal, maxBytes: maxResponseBytes, maxDurationMs },
+      sttContext("transcribe"),
     );
-  return new TextDecoder().decode(bytes);
+    return new TextDecoder().decode(bytes);
+  } catch (error) {
+    if (
+      error instanceof ProviderOperationError &&
+      error.code === "failed" &&
+      error.safeMessage === "The provider response was too large."
+    )
+      throw invalid(
+        module,
+        "transcribe",
+        "Provider response exceeded its size limit.",
+        "The provider response was too large.",
+      );
+    throw error;
+  }
 }
 
 async function parseTranscriptResponse(
@@ -464,7 +552,14 @@ async function parseTranscriptResponse(
     }
     return { text: deltas.join(""), providerOperationId: operation.operationId };
   }
-  const raw = await boundedText(response, config.maxResponseBytes, "stt");
+  const raw = await boundedText(
+    response,
+    http,
+    config.maxResponseBytes,
+    operation.signal,
+    config.requestTimeoutMs,
+    "stt",
+  );
   if (contentType.includes("text/plain")) return parseTranscriptValue(raw, operation.operationId);
   let value: unknown;
   try {
@@ -481,6 +576,10 @@ async function parseTranscriptResponse(
 
 function ttsContentType(format: NonNullable<TtsSynthesizeRequest["format"]>): string {
   return format === "mp3" ? "audio/mpeg" : format === "wav" ? "audio/wav" : "audio/pcm";
+}
+
+function isTtsFormat(value: unknown): value is NonNullable<TtsSynthesizeRequest["format"]> {
+  return value === "mp3" || value === "wav" || value === "pcm";
 }
 
 function ttsFileName(format: NonNullable<TtsSynthesizeRequest["format"]>): string {
@@ -564,6 +663,7 @@ export function createOpenAiImageDriver(options: OpenAiImageDriverOptions = {}):
       createContext: ProviderCreateContext,
     ): Promise<ImageClient> {
       const config = rawConfig as OpenAiImageConfig;
+      const secrets = new Set<string>();
       const http = createAuthenticatedHttp(
         config.endpoint,
         options.fetch,
@@ -571,6 +671,7 @@ export function createOpenAiImageDriver(options: OpenAiImageDriverOptions = {}):
         createContext,
         config.apiKeySecret,
         "image",
+        secrets,
       );
       return {
         async generate(
@@ -600,18 +701,22 @@ export function createOpenAiImageDriver(options: OpenAiImageDriverOptions = {}):
           if (size) body.size = size;
           if (model.startsWith("gpt-image")) body.output_format = config.outputFormat;
           else body.response_format = "b64_json";
-          return http.json(
-            {
-              method: "POST",
-              path: "/images/generations",
-              body,
-              signal: operation.signal,
-              maxResponseBytes: config.maxResponseBytes,
-              uncertainOnNetworkFailure: true,
-            },
-            imageContext("generate"),
-            (value) => parseImageResponse(value, config),
-          );
+          try {
+            return await http.json(
+              {
+                method: "POST",
+                path: "/images/generations",
+                body,
+                signal: operation.signal,
+                maxResponseBytes: config.maxResponseBytes,
+                uncertainOnNetworkFailure: true,
+              },
+              imageContext("generate"),
+              (value) => parseImageResponse(value, config),
+            );
+          } catch (error) {
+            throw redactError(error, secrets, "image", "generate");
+          }
         },
         async close() {},
       };
@@ -630,6 +735,7 @@ export function createOpenAiSttDriver(options: OpenAiSttDriverOptions = {}): Stt
     },
     async create(rawConfig: SttConfig, createContext: ProviderCreateContext): Promise<SttClient> {
       const config = rawConfig as OpenAiSttConfig;
+      const secrets = new Set<string>();
       const http = createAuthenticatedHttp(
         config.endpoint,
         options.fetch,
@@ -637,6 +743,7 @@ export function createOpenAiSttDriver(options: OpenAiSttDriverOptions = {}): Stt
         createContext,
         config.apiKeySecret,
         "stt",
+        secrets,
       );
       return {
         async transcribe(
@@ -651,6 +758,13 @@ export function createOpenAiSttDriver(options: OpenAiSttDriverOptions = {}): Stt
               "Audio input exceeds the provider size limit.",
               "The audio input is too large.",
             );
+          if (!audioContentType(audio.contentType))
+            throw invalid(
+              "stt",
+              "transcribe",
+              `OpenAI accepts audio input only, not ${audio.contentType}.`,
+              "Only audio input is supported.",
+            );
           const form = new FormData();
           form.append(
             "file",
@@ -662,17 +776,21 @@ export function createOpenAiSttDriver(options: OpenAiSttDriverOptions = {}): Stt
           if (request.language ?? config.defaultLanguage)
             form.append("language", request.language ?? config.defaultLanguage!);
           if (!request.diarize) form.append("timestamp_granularities[]", "word");
-          const response = await http.request(
-            {
-              method: "POST",
-              path: "/audio/transcriptions",
-              body: form,
-              signal: operation.signal,
-              uncertainOnNetworkFailure: true,
-            },
-            sttContext("transcribe"),
-          );
-          return parseTranscriptResponse(response, http, config, operation);
+          try {
+            const response = await http.request(
+              {
+                method: "POST",
+                path: "/audio/transcriptions",
+                body: form,
+                signal: operation.signal,
+                uncertainOnNetworkFailure: true,
+              },
+              sttContext("transcribe"),
+            );
+            return await parseTranscriptResponse(response, http, config, operation);
+          } catch (error) {
+            throw redactError(error, secrets, "stt", "transcribe");
+          }
         },
         async close() {},
       };
@@ -691,6 +809,7 @@ export function createOpenAiTtsDriver(options: OpenAiTtsDriverOptions = {}): Tts
     },
     async create(rawConfig: TtsConfig, createContext: ProviderCreateContext): Promise<TtsClient> {
       const config = rawConfig as OpenAiTtsConfig;
+      const secrets = new Set<string>();
       const http = createAuthenticatedHttp(
         config.endpoint,
         options.fetch,
@@ -698,6 +817,7 @@ export function createOpenAiTtsDriver(options: OpenAiTtsDriverOptions = {}): Tts
         createContext,
         config.apiKeySecret,
         "tts",
+        secrets,
       );
       return {
         async synthesize(
@@ -712,45 +832,80 @@ export function createOpenAiTtsDriver(options: OpenAiTtsDriverOptions = {}): Tts
               "The speech input is invalid.",
             );
           const format = request.format ?? "mp3";
-          const response = await http.request(
-            {
-              method: "POST",
-              path: "/audio/speech",
-              body: {
-                model: config.defaultModel,
-                input: request.text,
-                voice: request.voice ?? config.defaultVoice,
-                response_format: format,
+          if (!isTtsFormat(format))
+            throw invalid(
+              "tts",
+              "synthesize",
+              "The requested speech format is not supported.",
+              "The speech format is invalid.",
+            );
+          try {
+            const response = await http.request(
+              {
+                method: "POST",
+                path: "/audio/speech",
+                body: {
+                  model: config.defaultModel,
+                  input: request.text,
+                  voice: request.voice ?? config.defaultVoice,
+                  response_format: format,
+                },
+                signal: operation.signal,
+                uncertainOnNetworkFailure: true,
               },
-              signal: operation.signal,
-              uncertainOnNetworkFailure: true,
-            },
-            ttsContext("synthesize"),
-          );
-          const actualContentType = response.headers.get("content-type") ?? "";
-          const expectedContentType = ttsContentType(format);
-          if (
-            actualContentType.toLowerCase().includes("event-stream") ||
-            actualContentType.toLowerCase().includes("json")
-          )
-            throw invalid(
-              "tts",
-              "synthesize",
-              "OpenAI returned a streaming or JSON response for a binary speech request.",
-              "The speech provider returned an invalid audio response.",
+              ttsContext("synthesize"),
             );
-          assertTtsContentType(actualContentType, expectedContentType);
-          const bytes = new Uint8Array(await response.arrayBuffer());
-          if (bytes.byteLength === 0 || bytes.byteLength > config.maxResponseBytes)
-            throw invalid(
-              "tts",
-              "synthesize",
-              "Speech response exceeded its size limit.",
-              "The speech provider response was too large.",
-            );
-          return {
-            audio: { bytes, contentType: expectedContentType, fileName: ttsFileName(format) },
-          };
+            const actualContentType = response.headers.get("content-type") ?? "";
+            const expectedContentType = ttsContentType(format);
+            if (
+              actualContentType.toLowerCase().includes("event-stream") ||
+              actualContentType.toLowerCase().includes("json")
+            )
+              throw invalid(
+                "tts",
+                "synthesize",
+                "OpenAI returned a streaming or JSON response for a binary speech request.",
+                "The speech provider returned an invalid audio response.",
+              );
+            assertTtsContentType(actualContentType, expectedContentType);
+            let bytes: Uint8Array;
+            try {
+              bytes = await http.readResponseBytes(
+                response,
+                {
+                  signal: operation.signal,
+                  maxBytes: config.maxResponseBytes,
+                  maxDurationMs: config.requestTimeoutMs,
+                },
+                ttsContext("synthesize"),
+              );
+            } catch (error) {
+              if (
+                error instanceof ProviderOperationError &&
+                error.code === "failed" &&
+                error.safeMessage === "The provider response was too large."
+              )
+                throw invalid(
+                  "tts",
+                  "synthesize",
+                  "Speech response exceeded its size limit.",
+                  "The speech provider response was too large.",
+                );
+              throw error;
+            }
+            if (bytes.byteLength === 0)
+              throw invalid(
+                "tts",
+                "synthesize",
+                "Speech response exceeded its size limit.",
+                "The speech provider response was too large.",
+              );
+            return {
+              audio: { bytes, contentType: expectedContentType, fileName: ttsFileName(format) },
+            };
+          } catch (error) {
+            throw redactError(error, secrets, "tts", "synthesize");
+          }
         },
         async close() {},
       };
