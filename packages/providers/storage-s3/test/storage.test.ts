@@ -129,6 +129,22 @@ describe("S3 storage policy", () => {
     expect(constructed).toBe(false);
   });
 
+  it("does not construct a client after the create signal is aborted", async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+    let constructed = false;
+    const driver = createS3StorageDriver({
+      clientFactory: () => {
+        constructed = true;
+        return new S3Client({ region: "us-east-1" });
+      },
+    });
+    await expect(
+      driver.create({ bucket: "openmuse-test" }, { ...context, signal: aborted.signal }),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    expect(constructed).toBe(false);
+  });
+
   it("requires the registry-provided provider instance binding", async () => {
     const driver = createS3StorageDriver({
       clientFactory: () => new S3Client({ region: "us-east-1" }),
@@ -139,6 +155,17 @@ describe("S3 storage policy", () => {
         { signal, scopeId: "storage-test", workspaceId: "workspace-1", userId: "user-1" },
       ),
     ).rejects.toMatchObject({ code: "scope_missing" });
+  });
+
+  it("uses workspace, actor, and instance as the canonical scope without a tenant", async () => {
+    const driver = createS3StorageDriver({
+      clientFactory: () => new S3Client({ region: "us-east-1" }),
+    });
+    const client = await driver.create(
+      { bucket: "openmuse-test" },
+      { ...context, tenantId: undefined },
+    );
+    await client.close();
   });
 
   it("does not allow an operation to omit a bound tenant or switch actor", async () => {
@@ -400,6 +427,36 @@ describe("S3 storage policy", () => {
 
     await expect(pending).rejects.toMatchObject({ code: "cancelled", uncertain: false });
     await expect(iteratorReturned).resolves.toBeUndefined();
+    await client.close();
+  });
+
+  it("rejects a GET whose content type changes after HEAD", async () => {
+    const bytes = new TextEncoder().encode("mime-integrity");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const fake = fakeS3(async (command) => {
+      if (command instanceof HeadObjectCommand) {
+        return {
+          ContentLength: bytes.byteLength,
+          ContentType: "image/png",
+          Metadata: { "openmuse-sha256": sha256 },
+        };
+      }
+      if (command instanceof GetObjectCommand) {
+        return {
+          ContentLength: bytes.byteLength,
+          ContentType: "text/plain",
+          Body: bytes,
+        };
+      }
+      throw new Error("unexpected S3 command");
+    });
+    const client = await createS3StorageDriver({ clientFactory: () => fake }).create(
+      { bucket: "openmuse-test" },
+      context,
+    );
+    await expect(client.get(scopedObjectKey(), operation("mime-mismatch"))).rejects.toMatchObject({
+      code: "failed",
+    });
     await client.close();
   });
 });

@@ -223,6 +223,7 @@
         "@openmuse/provider-sandbox-e2b": "workspace:*",
         "@openmuse/provider-search-exa": "workspace:*",
         "@openmuse/provider-search-tavily": "workspace:*",
+        "@openmuse/provider-storage-s3": "workspace:*",
         "drizzle-orm": "catalog:backend",
       },
       "devDependencies": {

@@ -7,13 +7,13 @@ import type {
 } from "./types.js";
 
 export interface StorageConfig {
-  endpoint?: string;
-  bucket?: string;
-  region?: string;
-  maxObjectBytes?: number;
-  maxSignedUrlSeconds?: number;
+  endpoint?: string | undefined;
+  bucket?: string | undefined;
+  region?: string | undefined;
+  maxObjectBytes?: number | undefined;
+  maxSignedUrlSeconds?: number | undefined;
   /** Optional exact content-type allowlist enforced before upload. */
-  allowedContentTypes?: string[];
+  allowedContentTypes?: string[] | undefined;
 }
 export interface StoragePutRequest {
   key: string;

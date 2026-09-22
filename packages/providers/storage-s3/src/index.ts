@@ -69,6 +69,11 @@ export interface StorageS3DriverOptions {
   clientFactory?: (config: S3ClientConfig) => S3Client;
 }
 
+/**
+ * The application currently uses workspace as its canonical tenant boundary.
+ * A separate tenant ID is carried and checked when present, but workspace,
+ * actor, and provider instance identity are always required.
+ */
 interface ScopeBinding {
   tenantId?: string;
   workspaceId: string;
@@ -732,6 +737,7 @@ export function createS3StorageDriver(options: StorageS3DriverOptions = {}): Sto
     },
     config: { version: "1", schema: storageConfigSchema },
     async create(rawConfig: StorageConfig, createContext: ProviderCreateContext) {
+      assertNotAborted(createContext.signal, "configure");
       const config = storageConfigSchema.parse(rawConfig);
       const endpoint = assertTrustedEndpoint(config.endpoint, options.trustedEndpoints);
       const binding = scopeBinding(createContext);
@@ -826,6 +832,14 @@ export function createS3StorageDriver(options: StorageS3DriverOptions = {}): Sto
           response.ContentType ?? metadata.contentType,
           config.allowedContentTypes,
         );
+        if (contentType !== metadata.contentType) {
+          throw storageError(
+            "get",
+            "failed",
+            "The storage response content type did not match its metadata.",
+            "The storage object could not be verified.",
+          );
+        }
         return { bytes, contentType };
       };
 

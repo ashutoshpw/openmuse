@@ -22,6 +22,7 @@ import { createExaSearchDriver } from "@openmuse/provider-search-exa";
 import { createTavilySearchDriver } from "@openmuse/provider-search-tavily";
 import { createDaytonaSandboxDriver } from "@openmuse/provider-sandbox-daytona";
 import { createE2BSandboxDriver } from "@openmuse/provider-sandbox-e2b";
+import { createS3StorageDriver } from "@openmuse/provider-storage-s3";
 import type { ConversationTaskPayload, ResolvedModel } from "@openmuse/application";
 import type { TaskExecutionContext } from "@openmuse/application";
 import type { Task as DbTask } from "@openmuse/db";
@@ -245,8 +246,14 @@ export function decryptCredentialEnvelope(
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
 }
 
+export interface BuiltinProviderRegistryOptions {
+  deterministic?: boolean;
+  deterministicResponse?: string;
+  endpointPolicy?: ProviderEndpointPolicy;
+}
+
 export function createBuiltinProviderRegistry(
-  options: { deterministic?: boolean; deterministicResponse?: string } = {},
+  options: BuiltinProviderRegistryOptions = {},
 ): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register(createDaytonaSandboxDriver());
@@ -257,6 +264,10 @@ export function createBuiltinProviderRegistry(
   registry.register(createTavilySearchDriver());
   registry.register(createExaSearchDriver());
   registry.register(createAppConnectConnectorDriver());
+  const trustedEndpoints = options.endpointPolicy?.trustedEndpoints;
+  registry.register(
+    createS3StorageDriver(trustedEndpoints === undefined ? {} : { trustedEndpoints }),
+  );
   if (options.deterministic)
     registry.register(createDeterministicModelDriver(options.deterministicResponse));
   return registry;
@@ -265,7 +276,7 @@ export function createBuiltinProviderRegistry(
 export function createBuiltinProviderCatalog(
   options: ProviderEndpointPolicy = {},
 ): ProviderCatalog {
-  return new ProviderCatalog(createBuiltinProviderRegistry(), options);
+  return new ProviderCatalog(createBuiltinProviderRegistry({ endpointPolicy: options }), options);
 }
 
 function createDeterministicModelDriver(response = "deterministic response"): ModelDriver {
@@ -337,6 +348,7 @@ export class WorkerProviderRuntime {
     this.registry =
       options.registry ??
       createBuiltinProviderRegistry({
+        ...(options.endpointPolicy === undefined ? {} : { endpointPolicy: options.endpointPolicy }),
         ...(options.deterministic === undefined ? {} : { deterministic: options.deterministic }),
         ...(options.deterministicResponse === undefined
           ? {}

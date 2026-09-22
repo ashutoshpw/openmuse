@@ -26,6 +26,28 @@ describe("provider server composition", () => {
     });
   });
 
+  it("registers S3 storage with the deployment endpoint allowlist", async () => {
+    const registry = createBuiltinProviderRegistry({
+      endpointPolicy: { trustedEndpoints: ["https://objects.example.test/base/"] },
+    });
+    expect(registry.get("storage", "s3")).toMatchObject({ providerId: "s3" });
+
+    const scope = registry.createScope({
+      signal: new AbortController().signal,
+      tenantId: "tenant-1",
+      workspaceId: "workspace-1",
+      userId: "user-1",
+    });
+    await scope.resolve(
+      "storage-instance-1",
+      "storage",
+      "s3",
+      { bucket: "review-bucket", endpoint: "https://objects.example.test/base" },
+      { configDigest: "s3-registration" },
+    );
+    await scope.close("test complete");
+  });
+
   it("encrypts credentials with tenant, instance, secret, and revision AAD", () => {
     const encodedKey = key();
     const aad = {
