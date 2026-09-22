@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Daytona as OfficialDaytonaSdk } from "@daytonaio/sdk";
+import { Daytona as OfficialDaytonaSdk } from "@daytonaio/sdk";
 import {
   ProviderOperationError,
   type ProviderCreateContext,
@@ -104,6 +104,8 @@ export function createOfficialDaytonaFactory(
   };
 }
 
+const officialDaytonaFactory = createOfficialDaytonaFactory(OfficialDaytonaSdk);
+
 export interface DaytonaSandboxDriverOptions {
   factory?: DaytonaSdkFactory;
   providerId?: string;
@@ -144,12 +146,6 @@ const configSchema = z
       .positive()
       .max(15 * 60)
       .default(15 * 60),
-    maxFileBytes: z
-      .number()
-      .int()
-      .positive()
-      .max(100 * 1024 * 1024)
-      .default(10 * 1024 * 1024),
     maxOutputBytes: z
       .number()
       .int()
@@ -168,6 +164,7 @@ const defaultLimits: Required<SandboxLimits> = {
 };
 
 const controlTimeoutSeconds = 30;
+const daytonaTtlGranularitySeconds = 60;
 
 interface DaytonaConfig extends SandboxConfig {
   endpoint: string;
@@ -177,7 +174,6 @@ interface DaytonaConfig extends SandboxConfig {
   image?: string;
   allowedSnapshots: string[];
   maxSeconds: number;
-  maxFileBytes: number;
   maxOutputBytes: number;
 }
 
@@ -228,9 +224,9 @@ function assertOperationBinding(
 ): void {
   if (!context) return;
   if (
-    (context.workspaceId !== undefined && context.workspaceId !== binding.workspaceId) ||
-    (context.tenantId !== undefined && context.tenantId !== binding.tenantId) ||
-    (context.userId !== undefined && context.userId !== binding.userId)
+    context.workspaceId !== binding.workspaceId ||
+    (context.tenantId ?? "") !== (binding.tenantId ?? "") ||
+    (context.userId ?? "") !== (binding.userId ?? "")
   )
     throw providerError(
       providerId,
@@ -348,6 +344,62 @@ function mergeLimits(
       "Sandbox timeout exceeds the provider limit.",
     );
   return merged;
+}
+
+function daytonaLifetimeSeconds(seconds: number, providerId: string, operation: string): number {
+  const effective =
+    Math.floor(seconds / daytonaTtlGranularitySeconds) * daytonaTtlGranularitySeconds;
+  if (effective < daytonaTtlGranularitySeconds)
+    throw providerError(
+      providerId,
+      operation,
+      "invalid_request",
+      "Daytona can only enforce sandbox lifetimes in whole minutes of at least one minute.",
+      "The requested sandbox lifetime is too short for this provider.",
+    );
+  return effective;
+}
+
+function remainingDaytonaLifetime(
+  autoDestroyAt: string | undefined,
+  maxSeconds: number,
+  providerId: string,
+): number {
+  if (!autoDestroyAt)
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "Daytona did not report an absolute sandbox expiration time.",
+      "The sandbox lifetime could not be verified.",
+    );
+  const expirationMs = Date.parse(autoDestroyAt);
+  if (!Number.isFinite(expirationMs))
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "Daytona reported an invalid sandbox expiration time.",
+      "The sandbox lifetime could not be verified.",
+    );
+  const remaining = Math.floor((expirationMs - Date.now()) / 1000);
+  if (remaining <= 0)
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "The Daytona sandbox has expired.",
+      "The sandbox is no longer available.",
+    );
+  if (remaining > maxSeconds)
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "The Daytona sandbox lifetime exceeds the configured provider limit.",
+      "The sandbox lifetime is not allowed.",
+    );
+  return remaining;
 }
 
 function mapState(state: string | undefined): SandboxMetadata["status"] {
@@ -469,7 +521,6 @@ export function createDaytonaSandboxDriver(
         { key: "sandbox.create" },
         { key: "sandbox.reconnect" },
         { key: "sandbox.execute" },
-        { key: "sandbox.files" },
         { key: "sandbox.cancel" },
       ],
       requiredSecrets: [
@@ -496,15 +547,13 @@ export function createDaytonaSandboxDriver(
       rawConfig: SandboxConfig,
       rawCreateContext: ProviderCreateContext,
     ): Promise<SandboxClient> {
-      const config = configSchema.parse(rawConfig) as DaytonaConfig;
+      const parsedConfig = configSchema.parse(rawConfig) as DaytonaConfig;
+      const config = {
+        ...parsedConfig,
+        maxSeconds: daytonaLifetimeSeconds(parsedConfig.maxSeconds, providerId, "configure"),
+      } as DaytonaConfig;
       const createContext = Object.freeze({ ...rawCreateContext });
-      if (!options.factory)
-        throw providerError(
-          providerId,
-          "configure",
-          "unavailable",
-          "A Daytona SDK factory is required.",
-        );
+      const sdkFactory = options.factory ?? officialDaytonaFactory;
       if (!createContext.workspaceId)
         throw providerError(
           providerId,
@@ -549,7 +598,7 @@ export function createDaytonaSandboxDriver(
           "Daytona API key is empty.",
           "The Daytona provider is not configured.",
         );
-      const sdk = await options.factory.create({
+      const sdk = await sdkFactory.create({
         apiKey,
         apiUrl: config.endpoint,
         ...(config.target ? { target: config.target } : {}),
@@ -564,9 +613,12 @@ export function createDaytonaSandboxDriver(
       };
       const owned = new Map<string, DaytonaResource>();
       let closed = false;
+      let closing = false;
       const ensureOpen = (operation: string) => {
         if (closed)
           throw providerError(providerId, operation, "failed", "The sandbox client is closed.");
+        if (closing)
+          throw providerError(providerId, operation, "failed", "The sandbox client is closing.");
       };
 
       const inspect = async (
@@ -623,7 +675,6 @@ export function createDaytonaSandboxDriver(
           sandbox,
           metadata,
           binding,
-          config.maxFileBytes,
           config.maxOutputBytes,
           config.maxSeconds,
           inspect,
@@ -672,13 +723,22 @@ export function createDaytonaSandboxDriver(
             "The sandbox was not found.",
           );
         }
+        const remainingSeconds = remainingDaytonaLifetime(
+          sandbox.autoDestroyAt,
+          config.maxSeconds,
+          providerId,
+        );
         const limits: SandboxLimits = {
           ...defaultLimits,
           ...config.maxLimits,
           cpu: sandbox.cpu,
           memoryMb: Math.round(sandbox.memory * 1024),
           diskMb: Math.round(sandbox.disk * 1024),
-          timeoutSeconds: Math.min(config.maxSeconds, config.maxLimits?.timeoutSeconds ?? 60),
+          timeoutSeconds: Math.min(
+            config.maxSeconds,
+            config.maxLimits?.timeoutSeconds ?? 60,
+            remainingSeconds,
+          ),
         };
         const resource = resourceFor(sandbox, limits);
         owned.set(resource.id, resource);
@@ -722,6 +782,18 @@ export function createDaytonaSandboxDriver(
             config.maxSeconds,
             limits.timeoutSeconds ?? defaultLimits.timeoutSeconds,
           );
+          const effectiveLifetimeSeconds = daytonaLifetimeSeconds(
+            requestTimeout,
+            providerId,
+            "create",
+          );
+          const effectiveLimits: SandboxLimits = {
+            ...limits,
+            timeoutSeconds: Math.min(
+              limits.timeoutSeconds ?? defaultLimits.timeoutSeconds,
+              effectiveLifetimeSeconds,
+            ),
+          };
           let sandbox: DaytonaSandbox | undefined;
           try {
             const created = await raceSdk(
@@ -734,7 +806,7 @@ export function createDaytonaSandboxDriver(
                     memory: (limits.memoryMb ?? defaultLimits.memoryMb) / 1024,
                     disk: (limits.diskMb ?? defaultLimits.diskMb) / 1024,
                   },
-                  ttlMinutes: Math.max(1, Math.ceil(requestTimeout / 60)),
+                  ttlMinutes: effectiveLifetimeSeconds / daytonaTtlGranularitySeconds,
                 },
                 { timeout: requestTimeout },
               ),
@@ -778,7 +850,7 @@ export function createDaytonaSandboxDriver(
               "The sandbox could not be created.",
             );
           }
-          const resource = resourceFor(sandbox, limits);
+          const resource = resourceFor(sandbox, effectiveLimits);
           owned.set(resource.id, resource);
           return resource;
         },
@@ -791,25 +863,32 @@ export function createDaytonaSandboxDriver(
         },
         async close(reason?: string): Promise<void> {
           if (closed) return;
-          closed = true;
+          if (closing)
+            throw providerError(providerId, "close", "failed", "The sandbox client is closing.");
+          closing = true;
           const failures: unknown[] = [];
-          for (const resource of owned.values()) {
-            try {
-              await resource.destroy(undefined, reason ?? "client closed");
-            } catch (cause) {
-              failures.push(cause);
+          try {
+            for (const [id, resource] of owned) {
+              try {
+                await resource.destroy(undefined, reason ?? "client closed");
+                owned.delete(id);
+              } catch (cause) {
+                failures.push(cause);
+              }
             }
+            if (failures.length > 0)
+              throw providerError(
+                providerId,
+                "close",
+                "unknown_outcome",
+                `Failed to destroy ${failures.length} Daytona sandbox resource(s).`,
+                "The sandbox cleanup outcome is unknown.",
+                { details: { failureCount: failures.length } },
+              );
+            closed = true;
+          } finally {
+            closing = false;
           }
-          owned.clear();
-          if (failures.length > 0)
-            throw providerError(
-              providerId,
-              "close",
-              "unknown_outcome",
-              `Failed to destroy ${failures.length} Daytona sandbox resource(s).`,
-              "The sandbox cleanup outcome is unknown.",
-              { details: { failureCount: failures.length } },
-            );
         },
       };
     },
@@ -825,7 +904,6 @@ class DaytonaResource implements Sandbox {
     private readonly sandbox: DaytonaSandbox,
     metadata: SandboxMetadata,
     private readonly binding: DaytonaBinding,
-    private readonly maxFileBytes: number,
     private readonly maxOutputBytes: number,
     private readonly maxSeconds: number,
     private readonly inspect: (
@@ -942,90 +1020,27 @@ class DaytonaResource implements Sandbox {
   }
 
   async readFile(filePath: string, context: ProviderOperationContext): Promise<Uint8Array> {
-    this.ensureUsable("readFile");
-    assertOperationBinding(this.binding, context, this.binding.providerId, "readFile");
-    assertNotAborted(context.signal, this.binding.providerId, "readFile");
-    await this.inspect(this.sandbox, context, "readFile");
-    const path = safeWorkspacePath(filePath, this.binding.providerId, "readFile");
-    try {
-      const outcome = await raceSdk(
-        this.sandbox.fs.downloadFile(path, controlTimeoutSeconds),
-        context.signal,
-        controlTimeoutSeconds,
-      );
-      if (outcome.kind !== "value")
-        throw operationFailure(
-          this.binding.providerId,
-          "readFile",
-          outcome.kind,
-          "Daytona file read did not complete.",
-        );
-      if (outcome.value.byteLength > this.maxFileBytes)
-        throw providerError(
-          this.binding.providerId,
-          "readFile",
-          "failed",
-          "Daytona file exceeded its limit.",
-          "The sandbox file is too large.",
-        );
-      return new Uint8Array(outcome.value);
-    } catch (cause) {
-      if (cause instanceof ProviderOperationError) throw cause;
-      if (context.signal.aborted)
-        throw providerError(
-          this.binding.providerId,
-          "readFile",
-          "cancelled",
-          "The sandbox file read was cancelled.",
-        );
-      throw providerError(
-        this.binding.providerId,
-        "readFile",
-        "failed",
-        cause instanceof Error ? cause.message : "Daytona file read failed.",
-        "The sandbox file could not be read.",
-      );
-    }
+    void filePath;
+    void context;
+    throw providerError(
+      this.binding.providerId,
+      "readFile",
+      "permission_denied",
+      "Daytona file reads are disabled because the SDK cannot guarantee no-follow workspace confinement.",
+      "File operations are not supported by this sandbox provider.",
+    );
   }
 
   async writeFile(file: SandboxFile, context: ProviderOperationContext): Promise<void> {
-    this.ensureUsable("writeFile");
-    assertOperationBinding(this.binding, context, this.binding.providerId, "writeFile");
-    assertNotAborted(context.signal, this.binding.providerId, "writeFile");
-    await this.inspect(this.sandbox, context, "writeFile");
-    const path = safeWorkspacePath(file.path, this.binding.providerId, "writeFile");
-    const bytes = new Uint8Array(file.bytes);
-    if (bytes.byteLength > this.maxFileBytes)
-      throw providerError(
-        this.binding.providerId,
-        "writeFile",
-        "invalid_request",
-        "Daytona file exceeded its limit.",
-        "The sandbox file is too large.",
-      );
-    try {
-      const outcome = await raceSdk(
-        this.sandbox.fs.uploadFile(bytes, path, controlTimeoutSeconds),
-        context.signal,
-        controlTimeoutSeconds,
-      );
-      if (outcome.kind !== "value")
-        throw operationFailure(
-          this.binding.providerId,
-          "writeFile",
-          outcome.kind,
-          "Daytona file write could not be verified.",
-        );
-    } catch (cause) {
-      if (cause instanceof ProviderOperationError) throw cause;
-      throw providerError(
-        this.binding.providerId,
-        "writeFile",
-        "failed",
-        cause instanceof Error ? cause.message : "Daytona file write failed.",
-        "The sandbox file could not be written.",
-      );
-    }
+    void file;
+    void context;
+    throw providerError(
+      this.binding.providerId,
+      "writeFile",
+      "permission_denied",
+      "Daytona file writes are disabled because the SDK cannot guarantee no-follow workspace confinement.",
+      "File operations are not supported by this sandbox provider.",
+    );
   }
 
   async destroy(context?: ProviderOperationContext, reason = "sandbox destroyed"): Promise<void> {

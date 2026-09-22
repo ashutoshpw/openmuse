@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { E2B as OfficialE2BSdk } from "e2b";
+import { E2B as OfficialE2BSdk } from "e2b";
 import {
   ProviderOperationError,
   type ProviderCreateContext,
@@ -135,6 +135,8 @@ export function createOfficialE2BFactory(E2B: OfficialE2BConstructor): E2BClient
   };
 }
 
+const officialE2BFactory = createOfficialE2BFactory(OfficialE2BSdk);
+
 export interface E2BSandboxDriverOptions {
   factory?: E2BClientFactory;
   providerId?: string;
@@ -176,12 +178,6 @@ const configSchema = z
       .positive()
       .max(15 * 60)
       .default(15 * 60),
-    maxFileBytes: z
-      .number()
-      .int()
-      .positive()
-      .max(100 * 1024 * 1024)
-      .default(10 * 1024 * 1024),
     maxOutputBytes: z
       .number()
       .int()
@@ -210,7 +206,6 @@ interface E2BConfig extends SandboxConfig {
   allowedTemplates: string[];
   allowedImages: string[];
   maxSeconds: number;
-  maxFileBytes: number;
   maxOutputBytes: number;
 }
 
@@ -258,9 +253,9 @@ function assertOperationBinding(
 ): void {
   if (!context) return;
   if (
-    (context.workspaceId !== undefined && context.workspaceId !== binding.workspaceId) ||
-    (context.tenantId !== undefined && context.tenantId !== binding.tenantId) ||
-    (context.userId !== undefined && context.userId !== binding.userId)
+    context.workspaceId !== binding.workspaceId ||
+    (context.tenantId ?? "") !== (binding.tenantId ?? "") ||
+    (context.userId ?? "") !== (binding.userId ?? "")
   )
     throw providerError(
       providerId,
@@ -382,6 +377,40 @@ function mergeLimits(
   };
 }
 
+function remainingE2BLifetime(
+  endAt: Date | undefined,
+  maxSeconds: number,
+  providerId: string,
+): number {
+  const expirationMs = endAt?.getTime();
+  if (expirationMs === undefined || !Number.isFinite(expirationMs))
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "E2B did not report a valid absolute sandbox expiration time.",
+      "The sandbox lifetime could not be verified.",
+    );
+  const remaining = Math.floor((expirationMs - Date.now()) / 1000);
+  if (remaining <= 0)
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "The E2B sandbox has expired.",
+      "The sandbox is no longer available.",
+    );
+  if (remaining > maxSeconds)
+    throw providerError(
+      providerId,
+      "reconnect",
+      "invalid_request",
+      "The E2B sandbox lifetime exceeds the configured provider limit.",
+      "The sandbox lifetime is not allowed.",
+    );
+  return remaining;
+}
+
 function mapState(state: string | undefined): SandboxMetadata["status"] {
   switch (state) {
     case "running":
@@ -497,7 +526,6 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
         { key: "sandbox.create" },
         { key: "sandbox.reconnect" },
         { key: "sandbox.execute" },
-        { key: "sandbox.files" },
         { key: "sandbox.cancel" },
       ],
       requiredSecrets: [
@@ -527,13 +555,7 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
     ): Promise<SandboxClient> {
       const config = configSchema.parse(rawConfig) as E2BConfig;
       const createContext = Object.freeze({ ...rawCreateContext });
-      if (!options.factory)
-        throw providerError(
-          providerId,
-          "configure",
-          "unavailable",
-          "An E2B SDK factory is required.",
-        );
+      const sdkFactory = options.factory ?? officialE2BFactory;
       if (!createContext.workspaceId)
         throw providerError(
           providerId,
@@ -579,7 +601,7 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
           "E2B API key is empty.",
           "The E2B provider is not configured.",
         );
-      const sandboxClass = await options.factory.create({
+      const sandboxClass = await sdkFactory.create({
         apiKey,
         ...(config.domain ? { domain: config.domain } : {}),
         ...(config.endpoint ? { apiUrl: config.endpoint } : {}),
@@ -593,9 +615,12 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
       };
       const owned = new Map<string, E2BResource>();
       let closed = false;
+      let closing = false;
       const ensureOpen = (operation: string) => {
         if (closed)
           throw providerError(providerId, operation, "failed", "The sandbox client is closed.");
+        if (closing)
+          throw providerError(providerId, operation, "failed", "The sandbox client is closing.");
       };
 
       const inspect = async (
@@ -647,7 +672,6 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
           sandbox,
           metadataFor(info, binding, providerId, limits),
           binding,
-          config.maxFileBytes,
           config.maxOutputBytes,
           config.maxSeconds,
           inspect,
@@ -666,6 +690,7 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
             "Sandbox id is required.",
           );
         let info: E2BSandboxInfo;
+        let connectTimeoutMs: number;
         try {
           const infoOutcome = await callWithDeadline(
             (signal) => sandboxClass.getInfo(id, { requestTimeoutMs: controlTimeoutMs, signal }),
@@ -689,6 +714,12 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
             );
           info = infoOutcome.value;
           assertOwned(info, binding, providerId, "reconnect");
+          const reconnectLifetimeSeconds = remainingE2BLifetime(
+            info.endAt,
+            config.maxSeconds,
+            providerId,
+          );
+          connectTimeoutMs = reconnectLifetimeSeconds * 1000;
         } catch (cause) {
           if (cause instanceof ProviderOperationError) throw cause;
           throw providerError(
@@ -702,7 +733,12 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
         let sandbox: E2BSandbox;
         try {
           const connected = await callWithDeadline(
-            (signal) => sandboxClass.connect(id, { requestTimeoutMs: controlTimeoutMs, signal }),
+            (signal) =>
+              sandboxClass.connect(id, {
+                timeoutMs: connectTimeoutMs,
+                requestTimeoutMs: controlTimeoutMs,
+                signal,
+              }),
             context.signal,
             controlTimeoutMs,
           );
@@ -733,12 +769,17 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
             "The sandbox was not found.",
           );
         }
+        const remainingSeconds = remainingE2BLifetime(info.endAt, config.maxSeconds, providerId);
         const limits: SandboxLimits = {
           ...defaultLimits,
           ...config.maxLimits,
           cpu: info.cpuCount ?? defaultLimits.cpu,
           memoryMb: info.memoryMB ?? defaultLimits.memoryMb,
-          timeoutSeconds: Math.min(config.maxSeconds, config.maxLimits?.timeoutSeconds ?? 60),
+          timeoutSeconds: Math.min(
+            config.maxSeconds,
+            config.maxLimits?.timeoutSeconds ?? 60,
+            remainingSeconds,
+          ),
         };
         const resource = resourceFor(sandbox, info, limits);
         owned.set(resource.id, resource);
@@ -842,25 +883,32 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
         },
         async close(reason?: string): Promise<void> {
           if (closed) return;
-          closed = true;
+          if (closing)
+            throw providerError(providerId, "close", "failed", "The sandbox client is closing.");
+          closing = true;
           const failures: unknown[] = [];
-          for (const resource of owned.values()) {
-            try {
-              await resource.destroy(undefined, reason ?? "client closed");
-            } catch (cause) {
-              failures.push(cause);
+          try {
+            for (const [id, resource] of owned) {
+              try {
+                await resource.destroy(undefined, reason ?? "client closed");
+                owned.delete(id);
+              } catch (cause) {
+                failures.push(cause);
+              }
             }
+            if (failures.length > 0)
+              throw providerError(
+                providerId,
+                "close",
+                "unknown_outcome",
+                `Failed to destroy ${failures.length} E2B sandbox resource(s).`,
+                "The sandbox cleanup outcome is unknown.",
+                { details: { failureCount: failures.length } },
+              );
+            closed = true;
+          } finally {
+            closing = false;
           }
-          owned.clear();
-          if (failures.length > 0)
-            throw providerError(
-              providerId,
-              "close",
-              "unknown_outcome",
-              `Failed to destroy ${failures.length} E2B sandbox resource(s).`,
-              "The sandbox cleanup outcome is unknown.",
-              { details: { failureCount: failures.length } },
-            );
         },
       };
     },
@@ -894,7 +942,6 @@ class E2BResource implements Sandbox {
     private readonly sandbox: E2BSandbox,
     metadata: SandboxMetadata,
     private readonly binding: E2BBinding,
-    private readonly maxFileBytes: number,
     private readonly maxOutputBytes: number,
     private readonly maxSeconds: number,
     private readonly inspect: (
@@ -1111,112 +1158,27 @@ class E2BResource implements Sandbox {
   }
 
   async readFile(filePath: string, context: ProviderOperationContext): Promise<Uint8Array> {
-    this.ensureUsable("readFile");
-    assertOperationBinding(this.binding, context, this.binding.providerId, "readFile");
-    assertNotAborted(context.signal, this.binding.providerId, "readFile");
-    await this.inspect(this.sandbox, context, "readFile");
-    const path = safeWorkspacePath(filePath, this.binding.providerId, "readFile");
-    await this.assertNotSymlink(path, context, "readFile");
-    try {
-      const outcome = await callWithDeadline(
-        (signal) =>
-          this.sandbox.files.read(path, {
-            format: "bytes",
-            requestTimeoutMs: controlTimeoutMs,
-            signal,
-          }),
-        context.signal,
-        controlTimeoutMs,
-      );
-      if (outcome.kind === "aborted" && context.signal.aborted)
-        throw providerError(
-          this.binding.providerId,
-          "readFile",
-          "cancelled",
-          "The sandbox file read was cancelled.",
-        );
-      if (outcome.kind !== "value")
-        throw uncertain(
-          this.binding.providerId,
-          "readFile",
-          outcome.kind,
-          "E2B file read did not complete.",
-        );
-      if (outcome.value.byteLength > this.maxFileBytes)
-        throw providerError(
-          this.binding.providerId,
-          "readFile",
-          "failed",
-          "E2B file exceeded its limit.",
-          "The sandbox file is too large.",
-        );
-      return new Uint8Array(outcome.value);
-    } catch (cause) {
-      if (cause instanceof ProviderOperationError) throw cause;
-      if (context.signal.aborted)
-        throw providerError(
-          this.binding.providerId,
-          "readFile",
-          "cancelled",
-          "The sandbox file read was cancelled.",
-        );
-      throw providerError(
-        this.binding.providerId,
-        "readFile",
-        "failed",
-        cause instanceof Error ? cause.message : "E2B file read failed.",
-        "The sandbox file could not be read.",
-      );
-    }
+    void filePath;
+    void context;
+    throw providerError(
+      this.binding.providerId,
+      "readFile",
+      "permission_denied",
+      "E2B file reads are disabled because the SDK cannot guarantee no-follow workspace confinement.",
+      "File operations are not supported by this sandbox provider.",
+    );
   }
 
   async writeFile(file: SandboxFile, context: ProviderOperationContext): Promise<void> {
-    this.ensureUsable("writeFile");
-    assertOperationBinding(this.binding, context, this.binding.providerId, "writeFile");
-    assertNotAborted(context.signal, this.binding.providerId, "writeFile");
-    await this.inspect(this.sandbox, context, "writeFile");
-    const path = safeWorkspacePath(file.path, this.binding.providerId, "writeFile");
-    await this.assertNotSymlink(path, context, "writeFile", true);
-    const bytes = new Uint8Array(file.bytes);
-    if (bytes.byteLength > this.maxFileBytes)
-      throw providerError(
-        this.binding.providerId,
-        "writeFile",
-        "invalid_request",
-        "E2B file exceeded its limit.",
-        "The sandbox file is too large.",
-      );
-    const arrayBuffer = bytes.buffer.slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    ) as ArrayBuffer;
-    try {
-      const outcome = await callWithDeadline(
-        (signal) =>
-          this.sandbox.files.write(path, arrayBuffer, {
-            requestTimeoutMs: controlTimeoutMs,
-            signal,
-          }),
-        context.signal,
-        controlTimeoutMs,
-      );
-      if (outcome.kind !== "value")
-        throw uncertain(
-          this.binding.providerId,
-          "writeFile",
-          outcome.kind,
-          "E2B file write could not be verified.",
-        );
-    } catch (cause) {
-      if (cause instanceof ProviderOperationError) throw cause;
-      throw providerError(
-        this.binding.providerId,
-        "writeFile",
-        "failed",
-        cause instanceof Error ? cause.message : "E2B file write failed.",
-        "The sandbox file could not be written.",
-      );
-    }
+    void file;
+    void context;
+    throw providerError(
+      this.binding.providerId,
+      "writeFile",
+      "permission_denied",
+      "E2B file writes are disabled because the SDK cannot guarantee no-follow workspace confinement.",
+      "File operations are not supported by this sandbox provider.",
+    );
   }
 
   async destroy(context?: ProviderOperationContext, reason = "sandbox destroyed"): Promise<void> {
@@ -1272,44 +1234,6 @@ class E2BResource implements Sandbox {
     await this.destroy(undefined, reason ?? "sandbox closed");
   }
 
-  private async assertNotSymlink(
-    path: string,
-    context: ProviderOperationContext,
-    operation: string,
-    allowMissing = false,
-  ): Promise<void> {
-    if (!this.sandbox.files.getInfo) return;
-    try {
-      const outcome = await callWithDeadline(
-        (signal) =>
-          this.sandbox.files.getInfo!(path, {
-            requestTimeoutMs: controlTimeoutMs,
-            signal,
-          }),
-        context.signal,
-        controlTimeoutMs,
-      );
-      if (outcome.kind !== "value")
-        throw uncertain(
-          this.binding.providerId,
-          operation,
-          outcome.kind,
-          "E2B file inspection did not complete.",
-        );
-      if (outcome.value.type === "symlink" || outcome.value.symlinkTarget !== undefined)
-        throw providerError(
-          this.binding.providerId,
-          operation,
-          "permission_denied",
-          "E2B file operations do not follow symlinks.",
-          "The sandbox path is not allowed.",
-        );
-    } catch (cause) {
-      if (allowMissing && isNotFound(cause)) return;
-      throw cause;
-    }
-  }
-
   private ensureUsable(operation: string): void {
     this.ensureOpen(operation);
     if (this.destroyed)
@@ -1321,13 +1245,6 @@ class E2BResource implements Sandbox {
         "The sandbox is no longer available.",
       );
   }
-}
-
-function isNotFound(error: unknown): boolean {
-  return (
-    (error instanceof Error && /not found|404/i.test(error.message)) ||
-    (typeof error === "object" && error !== null && "code" in error && error.code === "not_found")
-  );
 }
 
 function markDestroyed(metadata: SandboxMetadata): void {

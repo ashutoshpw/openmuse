@@ -15,6 +15,17 @@ function key(): string {
 }
 
 describe("provider server composition", () => {
+  it("registers hosted sandbox adapters with their real SDK factories", () => {
+    const registry = createBuiltinProviderRegistry();
+
+    expect(registry.get("sandbox", "sandbox-daytona")).toMatchObject({
+      providerId: "sandbox-daytona",
+    });
+    expect(registry.get("sandbox", "sandbox-e2b")).toMatchObject({
+      providerId: "sandbox-e2b",
+    });
+  });
+
   it("encrypts credentials with tenant, instance, secret, and revision AAD", () => {
     const encodedKey = key();
     const aad = {

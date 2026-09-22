@@ -138,13 +138,12 @@ describe("Daytona sandbox provider", () => {
       command: "'printf' 'hello world' 'a'\\''b'",
       cwd: "/workspace",
     });
-    await sandbox.writeFile(
-      { path: "/workspace/value.txt", bytes: new Uint8Array([1, 2]) },
-      operation(),
-    );
-    await expect(sandbox.readFile("/workspace/value.txt", operation())).resolves.toEqual(
-      new Uint8Array([1, 2]),
-    );
+    await expect(
+      sandbox.writeFile(
+        { path: "/workspace/value.txt", bytes: new Uint8Array([1, 2]) },
+        operation(),
+      ),
+    ).rejects.toMatchObject({ code: "permission_denied" });
     await expect(client.reconnect("daytona-1", operation("workspace-2"))).rejects.toMatchObject({
       code: "permission_denied",
     });
@@ -160,16 +159,16 @@ describe("Daytona sandbox provider", () => {
       { code: "invalid_request" },
     );
     const sandbox = await client.create(request, operation());
-    await expect(
-      sandbox.writeFile({ path: "/workspace/../secret", bytes: new Uint8Array([1]) }, operation()),
-    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(sandbox.readFile("/workspace/value.txt", operation())).rejects.toMatchObject({
+      code: "permission_denied",
+    });
   });
 
   it("deletes the sandbox before reporting a deterministic timeout", async () => {
     const factory = new FakeFactory();
     factory.sandbox.process.pending = true;
     const client = await createClient(factory);
-    const sandbox = await client.create({ image, limits: { timeoutSeconds: 1 } }, operation());
+    const sandbox = await client.create({ image, limits: { timeoutSeconds: 60 } }, operation());
     await expect(
       sandbox.execute({ argv: ["sleep", "2"], timeoutSeconds: 1 }, operation()),
     ).resolves.toMatchObject({ exitCode: 124, timedOut: true });

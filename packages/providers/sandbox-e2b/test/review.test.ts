@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { E2B } from "e2b";
 import type {
   ProviderCreateContext,
   ProviderOperationContext,
@@ -7,10 +8,12 @@ import type {
 } from "@openmuse/provider-contracts";
 import {
   createE2BSandboxDriver,
+  createOfficialE2BFactory,
   type E2BClientFactory,
   type E2BCommandHandle,
   type E2BCommandResult,
   type E2BCommandStartOptions,
+  type E2BConnectOptions,
   type E2BCommands,
   type E2BFiles,
   type E2BSandbox,
@@ -124,12 +127,14 @@ class ReviewSandbox implements E2BSandbox {
 
 class ReviewSandboxClass implements E2BSandboxClass {
   readonly sandbox = new ReviewSandbox();
+  connectOptions?: E2BConnectOptions;
 
   async create(): Promise<E2BSandbox> {
     return this.sandbox;
   }
 
-  async connect(): Promise<E2BSandbox> {
+  async connect(_id: string, options?: E2BConnectOptions): Promise<E2BSandbox> {
+    this.connectOptions = options;
     return this.sandbox;
   }
 
@@ -166,6 +171,15 @@ async function createClient(factory: ReviewFactory, overrides: Record<string, un
 const request: SandboxCreateRequest = { image: template };
 
 describe("E2B independent regressions", () => {
+  it("constructs the pinned E2B SDK through the official factory without network I/O", async () => {
+    const factory = createOfficialE2BFactory(E2B);
+    const sdk = await factory.create({ apiKey: "review-key", apiUrl: "https://example.invalid" });
+
+    expect(typeof sdk.create).toBe("function");
+    expect(typeof sdk.connect).toBe("function");
+    expect(typeof sdk.getInfo).toBe("function");
+  });
+
   it("retains failed cleanup so a caller can retry close", async () => {
     const factory = new ReviewFactory();
     factory.sandboxClass.sandbox.killFailures = 1;
@@ -220,6 +234,28 @@ describe("E2B independent regressions", () => {
       );
     expect(outcome.resolved).toBe(false);
     if (!outcome.resolved) expect(outcome.error).toMatchObject({ code: "invalid_request" });
+  });
+
+  it("caps reconnect execution by E2B's remaining absolute lifetime", async () => {
+    const factory = new ReviewFactory();
+    factory.sandboxClass.sandbox.info.endAt = new Date(Date.now() + 25_000);
+    const client = await createClient(factory, { maxSeconds: 180 });
+
+    const sandbox = await client.reconnect(factory.sandboxClass.sandbox.sandboxId, operation());
+
+    expect(sandbox.metadata.limits.timeoutSeconds).toBeGreaterThan(0);
+    expect(sandbox.metadata.limits.timeoutSeconds).toBeLessThan(60);
+    expect(factory.sandboxClass.connectOptions?.timeoutMs).toBeLessThan(60_000);
+  });
+
+  it("rejects an expired E2B sandbox during reconnect", async () => {
+    const factory = new ReviewFactory();
+    factory.sandboxClass.sandbox.info.endAt = new Date(Date.now() - 1_000);
+    const client = await createClient(factory);
+
+    await expect(
+      client.reconnect(factory.sandboxClass.sandbox.sandboxId, operation()),
+    ).rejects.toMatchObject({ code: "invalid_request" });
   });
 
   it("rejects oversized buffered command output", async () => {

@@ -20,6 +20,8 @@ import { createOllamaModelDriver } from "@openmuse/provider-model-ollama";
 import { createOpenAiCompatibleModelDriver } from "@openmuse/provider-model-openai-compatible";
 import { createExaSearchDriver } from "@openmuse/provider-search-exa";
 import { createTavilySearchDriver } from "@openmuse/provider-search-tavily";
+import { createDaytonaSandboxDriver } from "@openmuse/provider-sandbox-daytona";
+import { createE2BSandboxDriver } from "@openmuse/provider-sandbox-e2b";
 import type { ConversationTaskPayload, ResolvedModel } from "@openmuse/application";
 import type { TaskExecutionContext } from "@openmuse/application";
 import type { Task as DbTask } from "@openmuse/db";
@@ -247,6 +249,8 @@ export function createBuiltinProviderRegistry(
   options: { deterministic?: boolean; deterministicResponse?: string } = {},
 ): ProviderRegistry {
   const registry = new ProviderRegistry();
+  registry.register(createDaytonaSandboxDriver());
+  registry.register(createE2BSandboxDriver());
   registry.register(createOpenAiCompatibleModelDriver());
   registry.register(createMetaModelDriver());
   registry.register(createOllamaModelDriver());

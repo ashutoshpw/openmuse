@@ -19,6 +19,8 @@
     "@openmuse/provider-model-meta": "workspace:*",
     "@openmuse/provider-model-ollama": "workspace:*",
     "@openmuse/provider-model-openai-compatible": "workspace:*",
+    "@openmuse/provider-sandbox-daytona": "workspace:*",
+    "@openmuse/provider-sandbox-e2b": "workspace:*",
     "@openmuse/provider-search-exa": "workspace:*",
     "@openmuse/provider-search-tavily": "workspace:*",
     "drizzle-orm": "catalog:backend"

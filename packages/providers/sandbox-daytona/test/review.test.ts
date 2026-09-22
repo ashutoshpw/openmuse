@@ -80,7 +80,7 @@ class ReviewSandbox implements DaytonaSandbox {
   readonly state = "started";
   readonly snapshot = image;
   readonly createdAt = "2026-01-01T00:00:00.000Z";
-  readonly autoDestroyAt = "2099-01-01T00:00:00.000Z";
+  autoDestroyAt = "2099-01-01T00:00:00.000Z";
   readonly cpu = 1;
   readonly memory = 0.5;
   readonly disk = 0.5;
@@ -212,6 +212,27 @@ describe("Daytona independent regressions", () => {
     );
     expect(outcome.resolved).toBe(false);
     if (!outcome.resolved) expect(outcome.error).toMatchObject({ code: "invalid_request" });
+  });
+
+  it("caps reconnect execution by Daytona's remaining absolute lifetime", async () => {
+    const factory = new ReviewFactory();
+    factory.sandbox.autoDestroyAt = new Date(Date.now() + 25_000).toISOString();
+    const client = await createClient(factory, { maxSeconds: 180 });
+
+    const sandbox = await client.reconnect(factory.sandbox.id, operation());
+
+    expect(sandbox.metadata.limits.timeoutSeconds).toBeGreaterThan(0);
+    expect(sandbox.metadata.limits.timeoutSeconds).toBeLessThan(60);
+  });
+
+  it("rejects an expired Daytona sandbox during reconnect", async () => {
+    const factory = new ReviewFactory();
+    factory.sandbox.autoDestroyAt = new Date(Date.now() - 1_000).toISOString();
+    const client = await createClient(factory);
+
+    await expect(client.reconnect(factory.sandbox.id, operation())).rejects.toMatchObject({
+      code: "invalid_request",
+    });
   });
 
   it("rejects oversized buffered command output", async () => {
