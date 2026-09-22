@@ -58,7 +58,9 @@ describe.skipIf(!integration)("OpenMuse chat/provider adversarial PostgreSQL int
       db: harness.runtime,
       auth,
       allowedOrigins: [origin],
-      providerCatalog: createBuiltinProviderCatalog(),
+      providerCatalog: createBuiltinProviderCatalog({
+        trustedEndpoints: ["http://127.0.0.1:11434"],
+      }),
       credentialEncryptionKey: encryptionKey,
     });
     currentApi = api;
