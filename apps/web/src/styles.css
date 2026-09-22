@@ -1628,9 +1628,13 @@ a {
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 19px;
   box-shadow: 0 24px 70px rgba(32, 28, 24, 0.2);
+  margin: 0;
   max-width: 470px;
   padding: 24px;
   width: 100%;
+}
+.om-modal::backdrop {
+  background: transparent;
 }
 .om-modal__heading {
   align-items: flex-start;

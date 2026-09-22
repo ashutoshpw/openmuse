@@ -72,14 +72,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }),
     [baseUrl, queryClient],
   );
-
-  return (
-    <AppContext.Provider
-      value={{ api, baseUrl, isSignedOut, retrySession, signIn, signOut }}
-    >
-      {children}
-    </AppContext.Provider>
+  const value = useMemo<AppContextValue>(
+    () => ({ api, baseUrl, isSignedOut, retrySession, signIn, signOut }),
+    [api, baseUrl, isSignedOut, retrySession, signIn, signOut],
   );
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
 export function useOpenMuse() {
@@ -111,6 +109,7 @@ type WorkspaceContextValue = {
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
+const EMPTY_WORKSPACES: Workspace[] = [];
 
 export function WorkspaceProvider({
   session,
@@ -127,7 +126,7 @@ export function WorkspaceProvider({
     queryFn: () => api.listWorkspaces(),
     staleTime: 30_000,
   });
-  const workspaces = query.data?.items ?? [];
+  const workspaces = query.data?.items ?? EMPTY_WORKSPACES;
   const workspace =
     workspaces.find((item) => item.id === selectedWorkspaceId) ?? workspaces[0] ?? null;
 

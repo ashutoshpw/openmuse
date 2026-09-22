@@ -191,7 +191,6 @@ function WorkspaceOnboarding() {
         <form className="om-form" onSubmit={submit}>
           <label htmlFor="workspace-name">Workspace name</label>
           <input
-            autoFocus
             id="workspace-name"
             onChange={(event) => setName(event.target.value)}
             placeholder="e.g. Studio, Home, Research"
@@ -238,7 +237,7 @@ function WorkspaceError() {
 function WorkspaceMenu({ onClose }: { onClose: () => void }) {
   const { workspaces, workspace, selectWorkspace } = useWorkspace();
   return (
-    <div className="om-workspace-menu" role="dialog" aria-label="Choose workspace">
+    <div aria-label="Choose workspace" className="om-workspace-menu" role="menu">
       <div className="om-workspace-menu__heading">
         <span>Switch workspace</span>
         <IconButton label="Close workspace menu" onClick={onClose}>
@@ -253,6 +252,7 @@ function WorkspaceMenu({ onClose }: { onClose: () => void }) {
             selectWorkspace(item.id);
             onClose();
           }}
+          role="menuitem"
           type="button"
         >
           <span>{initials(item.name)}</span>
@@ -355,8 +355,7 @@ function AuthenticatedApp() {
 export function RootLayout() {
   const { isSignedOut, retrySession } = useOpenMuse();
   const sessionQuery = useSessionQuery();
-  if (isSignedOut)
-    return <LoginScreen error={null} onRetry={retrySession} />;
+  if (isSignedOut) return <LoginScreen error={null} onRetry={retrySession} />;
   if (sessionQuery.isPending) return <LoadingScreen />;
   if (!sessionQuery.data)
     return <LoginScreen error={sessionQuery.error} onRetry={() => void sessionQuery.refetch()} />;

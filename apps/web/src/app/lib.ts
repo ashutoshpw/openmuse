@@ -10,6 +10,11 @@ export const navigationItems: SidebarItem[] = [
   { label: "Settings", href: "/settings", icon: "settings" },
 ];
 
+const relativeDateFormatter = new Intl.DateTimeFormat("en", {
+  month: "short",
+  day: "numeric",
+});
+
 export function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
@@ -35,7 +40,7 @@ export function formatRelativeTime(value: string | undefined, now = Date.now()) 
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(timestamp);
+  return relativeDateFormatter.format(timestamp);
 }
 
 export function formatDate(

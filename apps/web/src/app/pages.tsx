@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import type {
   Approval,
   Connection,
@@ -43,6 +50,44 @@ function ErrorNotice({
           Try again
         </Button>
       ) : null}
+    </div>
+  );
+}
+
+function ModalDialog({
+  children,
+  labelledBy,
+  onClose,
+}: {
+  children: ReactNode;
+  labelledBy: string;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  return (
+    <div className="om-modal-backdrop" role="presentation">
+      <dialog
+        aria-labelledby={labelledBy}
+        aria-modal="true"
+        className="om-modal"
+        onCancel={(event) => {
+          event.preventDefault();
+          onClose();
+        }}
+        ref={dialogRef}
+      >
+        {children}
+      </dialog>
     </div>
   );
 }
@@ -491,59 +536,57 @@ function ShareConversationPanel({
     },
   });
   return (
-    <div className="om-modal-backdrop" role="presentation">
-      <div aria-labelledby="share-title" className="om-modal" role="dialog">
-        <div className="om-modal__heading">
-          <div>
-            <span className="om-eyebrow">Read-only snapshot</span>
-            <h2 id="share-title">Share this conversation</h2>
-          </div>
-          <IconButton label="Close share dialog" onClick={onClose}>
-            <Icon name="close" />
-          </IconButton>
+    <ModalDialog labelledBy="share-title" onClose={onClose}>
+      <div className="om-modal__heading">
+        <div>
+          <span className="om-eyebrow">Read-only snapshot</span>
+          <h2 id="share-title">Share this conversation</h2>
         </div>
-        <p>
-          Share access is explicit and read-only. Enter a workspace member’s email; the server
-          resolves the recipient and never trusts a browser-supplied user ID.
-        </p>
-        <form
-          className="om-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (recipientEmail.trim()) mutation.mutate();
-          }}
-        >
-          <label htmlFor="share-subject">Recipient email</label>
-          <input
-            autoComplete="email"
-            id="share-subject"
-            onChange={(event) => setRecipientEmail(event.target.value)}
-            placeholder="member@example.com"
-            type="email"
-            value={recipientEmail}
-          />
-          {message ? (
-            <p className="om-form-message om-form-message--success" role="status">
-              {message}
-            </p>
-          ) : null}
-          {mutation.error ? (
-            <p className="om-form-message" role="alert">
-              {errorMessage(mutation.error, "The share could not be created.")}
-            </p>
-          ) : null}
-          <div className="om-modal__actions">
-            <Button onClick={onClose} type="button" variant="quiet">
-              Cancel
-            </Button>
-            <Button disabled={mutation.isPending || !recipientEmail.trim()} type="submit">
-              {mutation.isPending ? "Sharing…" : "Share read-only"}
-              <Icon name="arrowUp" size={15} />
-            </Button>
-          </div>
-        </form>
+        <IconButton label="Close share dialog" onClick={onClose}>
+          <Icon name="close" />
+        </IconButton>
       </div>
-    </div>
+      <p>
+        Share access is explicit and read-only. Enter a workspace member’s email; the server
+        resolves the recipient and never trusts a browser-supplied user ID.
+      </p>
+      <form
+        className="om-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (recipientEmail.trim()) mutation.mutate();
+        }}
+      >
+        <label htmlFor="share-subject">Recipient email</label>
+        <input
+          autoComplete="email"
+          id="share-subject"
+          onChange={(event) => setRecipientEmail(event.target.value)}
+          placeholder="member@example.com"
+          type="email"
+          value={recipientEmail}
+        />
+        {message ? (
+          <p className="om-form-message om-form-message--success" role="status">
+            {message}
+          </p>
+        ) : null}
+        {mutation.error ? (
+          <p className="om-form-message" role="alert">
+            {errorMessage(mutation.error, "The share could not be created.")}
+          </p>
+        ) : null}
+        <div className="om-modal__actions">
+          <Button onClick={onClose} type="button" variant="quiet">
+            Cancel
+          </Button>
+          <Button disabled={mutation.isPending || !recipientEmail.trim()} type="submit">
+            {mutation.isPending ? "Sharing…" : "Share read-only"}
+            <Icon name="arrowUp" size={15} />
+          </Button>
+        </div>
+      </form>
+    </ModalDialog>
   );
 }
 
@@ -603,8 +646,12 @@ export function ConversationPage() {
   const messageItems = messagesQuery.data?.items ?? [];
   const messages = messageItems.reduce<typeof messageItems>((ordered, message) => {
     const insertAt = ordered.findIndex((item) => item.sequence > message.sequence);
-    if (insertAt === -1) return [...ordered, message];
-    return [...ordered.slice(0, insertAt), message, ...ordered.slice(insertAt)];
+    if (insertAt === -1) {
+      ordered.push(message);
+      return ordered;
+    }
+    ordered.splice(insertAt, 0, message);
+    return ordered;
   }, []);
   const title = conversationQuery.data?.title || "New conversation";
   const hasProviders = providersQuery.data?.some((provider) => provider.status === "available");
@@ -842,7 +889,7 @@ export function GoalsPage() {
   const [scheduleKind, setScheduleKind] = useState<"none" | "once" | "interval" | "cron">("none");
   const [scheduleValue, setScheduleValue] = useState("");
   const [timezone, setTimezone] = useState(
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   );
   const createMutation = useMutation({
     mutationFn: () =>
@@ -1498,27 +1545,29 @@ function ProviderSetupPanel({
         scope: "workspace",
         limit: 100,
       });
-      const credentialBindings = [] as Array<{ name: string; credentialId: string }>;
-      for (const secret of provider.requiredSecrets) {
-        const current = credentials.items.find(
-          (credential) =>
-            credential.credentialKind === secret.name && credential.status === "active",
-        );
-        const value = secrets[secret.name]?.trim();
-        if (value) {
-          const saved = current
-            ? await api.updateProviderCredential(current.id, { secret: value })
-            : await api.createProviderCredential({
-                providerId: provider.providerId,
-                credentialKind: secret.name,
-                scope: "workspace",
-                secret: value,
-              });
-          credentialBindings.push({ name: secret.name, credentialId: saved.id });
-        } else if (current) {
-          credentialBindings.push({ name: secret.name, credentialId: current.id });
-        }
-      }
+      const credentialBindings = (
+        await Promise.all(
+          provider.requiredSecrets.map(async (secret) => {
+            const current = credentials.items.find(
+              (credential) =>
+                credential.credentialKind === secret.name && credential.status === "active",
+            );
+            const value = secrets[secret.name]?.trim();
+            if (value) {
+              const saved = current
+                ? await api.updateProviderCredential(current.id, { secret: value })
+                : await api.createProviderCredential({
+                    providerId: provider.providerId,
+                    credentialKind: secret.name,
+                    scope: "workspace",
+                    secret: value,
+                  });
+              return { name: secret.name, credentialId: saved.id };
+            }
+            return current ? { name: secret.name, credentialId: current.id } : null;
+          }),
+        )
+      ).filter((binding): binding is { name: string; credentialId: string } => binding !== null);
       const config = {
         ...(endpoint.trim() ? { endpoint: endpoint.trim() } : {}),
         ...(defaultModel.trim() ? { defaultModel: defaultModel.trim() } : {}),
@@ -1558,94 +1607,92 @@ function ProviderSetupPanel({
   });
 
   return (
-    <div className="om-modal-backdrop" role="presentation">
-      <div aria-labelledby="provider-setup-title" className="om-modal" role="dialog">
-        <div className="om-modal__heading">
-          <div>
-            <span className="om-eyebrow">Server-side provider instance</span>
-            <h2 id="provider-setup-title">Configure {provider.displayName}</h2>
-          </div>
-          <IconButton label="Close provider setup" onClick={onClose}>
-            <Icon name="close" />
-          </IconButton>
+    <ModalDialog labelledBy="provider-setup-title" onClose={onClose}>
+      <div className="om-modal__heading">
+        <div>
+          <span className="om-eyebrow">Server-side provider instance</span>
+          <h2 id="provider-setup-title">Configure {provider.displayName}</h2>
         </div>
-        <p>
-          Configuration is sent to your OpenMuse server. Secrets are write-only, encrypted there,
-          and cleared from this form after the request settles.
-        </p>
-        <form
-          className="om-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!saveMutation.isPending && !deleteMutation.isPending) saveMutation.mutate();
-          }}
-        >
-          <label htmlFor="provider-display-name">Instance name</label>
-          <input
-            id="provider-display-name"
-            onChange={(event) => setDisplayName(event.target.value)}
-            value={displayName}
-          />
-          <label htmlFor="provider-endpoint">Endpoint (optional)</label>
-          <input
-            id="provider-endpoint"
-            onChange={(event) => setEndpoint(event.target.value)}
-            placeholder="https://api.example.com/v1"
-            type="url"
-            value={endpoint}
-          />
-          <label htmlFor="provider-model">Default model (optional)</label>
-          <input
-            id="provider-model"
-            onChange={(event) => setDefaultModel(event.target.value)}
-            placeholder="e.g. gpt-4o-mini"
-            value={defaultModel}
-          />
-          {provider.requiredSecrets.map((secret) => (
-            <span key={secret.name}>
-              <label htmlFor={`provider-secret-${secret.name}`}>{secret.name}</label>
-              <input
-                autoComplete="new-password"
-                id={`provider-secret-${secret.name}`}
-                onChange={(event) =>
-                  setSecrets((current) => ({ ...current, [secret.name]: event.target.value }))
-                }
-                placeholder={secret.configured ? "Leave blank to keep current key" : "Paste secret"}
-                type="password"
-                value={secrets[secret.name] ?? ""}
-              />
-            </span>
-          ))}
-          {saveMutation.error || deleteMutation.error ? (
-            <p className="om-form-message" role="alert">
-              {errorMessage(
-                saveMutation.error ?? deleteMutation.error,
-                "Provider setup could not be saved.",
-              )}
-            </p>
-          ) : null}
-          <div className="om-modal__actions">
-            {existingInstance ? (
-              <Button
-                disabled={saveMutation.isPending || deleteMutation.isPending}
-                onClick={() => deleteMutation.mutate()}
-                type="button"
-                variant="danger"
-              >
-                {deleteMutation.isPending ? "Removing…" : "Remove instance"}
-              </Button>
-            ) : null}
-            <Button onClick={onClose} type="button" variant="quiet">
-              Cancel
-            </Button>
-            <Button disabled={saveMutation.isPending || deleteMutation.isPending} type="submit">
-              {saveMutation.isPending ? "Saving…" : "Save on server"}
-              <Icon name="arrowUp" size={15} />
-            </Button>
-          </div>
-        </form>
+        <IconButton label="Close provider setup" onClick={onClose}>
+          <Icon name="close" />
+        </IconButton>
       </div>
-    </div>
+      <p>
+        Configuration is sent to your OpenMuse server. Secrets are write-only, encrypted there, and
+        cleared from this form after the request settles.
+      </p>
+      <form
+        className="om-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!saveMutation.isPending && !deleteMutation.isPending) saveMutation.mutate();
+        }}
+      >
+        <label htmlFor="provider-display-name">Instance name</label>
+        <input
+          id="provider-display-name"
+          onChange={(event) => setDisplayName(event.target.value)}
+          value={displayName}
+        />
+        <label htmlFor="provider-endpoint">Endpoint (optional)</label>
+        <input
+          id="provider-endpoint"
+          onChange={(event) => setEndpoint(event.target.value)}
+          placeholder="https://api.example.com/v1"
+          type="url"
+          value={endpoint}
+        />
+        <label htmlFor="provider-model">Default model (optional)</label>
+        <input
+          id="provider-model"
+          onChange={(event) => setDefaultModel(event.target.value)}
+          placeholder="e.g. gpt-4o-mini"
+          value={defaultModel}
+        />
+        {provider.requiredSecrets.map((secret) => (
+          <span key={secret.name}>
+            <label htmlFor={`provider-secret-${secret.name}`}>{secret.name}</label>
+            <input
+              autoComplete="new-password"
+              id={`provider-secret-${secret.name}`}
+              onChange={(event) =>
+                setSecrets((current) => ({ ...current, [secret.name]: event.target.value }))
+              }
+              placeholder={secret.configured ? "Leave blank to keep current key" : "Paste secret"}
+              type="password"
+              value={secrets[secret.name] ?? ""}
+            />
+          </span>
+        ))}
+        {saveMutation.error || deleteMutation.error ? (
+          <p className="om-form-message" role="alert">
+            {errorMessage(
+              saveMutation.error ?? deleteMutation.error,
+              "Provider setup could not be saved.",
+            )}
+          </p>
+        ) : null}
+        <div className="om-modal__actions">
+          {existingInstance ? (
+            <Button
+              disabled={saveMutation.isPending || deleteMutation.isPending}
+              onClick={() => deleteMutation.mutate()}
+              type="button"
+              variant="danger"
+            >
+              {deleteMutation.isPending ? "Removing…" : "Remove instance"}
+            </Button>
+          ) : null}
+          <Button onClick={onClose} type="button" variant="quiet">
+            Cancel
+          </Button>
+          <Button disabled={saveMutation.isPending || deleteMutation.isPending} type="submit">
+            {saveMutation.isPending ? "Saving…" : "Save on server"}
+            <Icon name="arrowUp" size={15} />
+          </Button>
+        </div>
+      </form>
+    </ModalDialog>
   );
 }
 
@@ -1919,14 +1966,18 @@ export function SettingsPage() {
                   <span>
                     <Icon name="lock" size={15} />
                     <strong>
-                      {share.resourceType === "conversation" ? "Conversation snapshot" : "Artifact snapshot"}
+                      {share.resourceType === "conversation"
+                        ? "Conversation snapshot"
+                        : "Artifact snapshot"}
                     </strong>
                   </span>
                   <Badge tone={share.status === "active" ? "sage" : "neutral"}>
                     {share.status}
                   </Badge>
                   <small>
-                    {share.subjectType === "workspace" ? "Workspace members" : "Workspace recipient"}
+                    {share.subjectType === "workspace"
+                      ? "Workspace members"
+                      : "Workspace recipient"}
                   </small>
                 </div>
               ))
