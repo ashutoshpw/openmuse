@@ -5,6 +5,8 @@ build/
 .next/
 .expo/
 coverage/
+playwright-report/
+test-results/
 *.tsbuildinfo
 
 .env

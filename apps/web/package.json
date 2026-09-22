@@ -1,0 +1,33 @@
+{
+  "name": "@openmuse/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint .",
+    "test": "vitest run src/app/lib.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@openmuse/client": "workspace:*",
+    "@openmuse/contracts": "workspace:*",
+    "@openmuse/ui-web": "workspace:*",
+    "@tanstack/react-query": "catalog:frontend",
+    "@tanstack/react-router": "catalog:frontend",
+    "react": "catalog:frontend",
+    "react-dom": "catalog:frontend"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:testing",
+    "@types/react": "catalog:frontend",
+    "@types/react-dom": "catalog:frontend",
+    "@vitejs/plugin-react": "catalog:frontend",
+    "typescript": "catalog:tooling",
+    "vite": "catalog:frontend",
+    "vitest": "catalog:testing"
+  }
+}
