@@ -1,0 +1,8 @@
+# Third-party notices
+
+OpenMuse does not vendor third-party source code at the scaffold stage.
+Runtime and development dependencies are declared in the workspace manifests;
+their upstream license and notice files remain authoritative.
+
+Release artifacts must include an inventory of installed dependencies and
+their licenses generated from the resolved lockfile.
