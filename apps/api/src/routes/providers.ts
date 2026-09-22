@@ -25,6 +25,7 @@ import {
 } from "@openmuse/db";
 import {
   ProviderCatalog,
+  SUPPORTED_CREDENTIAL_KEY_VERSION,
   type ProviderCatalogEntry,
   encryptCredentialEnvelope,
 } from "@openmuse/provider-server";
@@ -768,7 +769,7 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
       scope: parsed.data.scope,
       credentialKind: parsed.data.credentialKind,
       encryptedValue,
-      keyVersion: 1,
+      keyVersion: SUPPORTED_CREDENTIAL_KEY_VERSION,
     });
     return envelope(c, credentialResource(row), c.get("requestId"));
   };
@@ -803,6 +804,12 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
     const repository = new ProviderCredentialRepository(scoped);
     const credentialId = routeParam(c, "credentialId");
     const current = await repository.getForSecretMutation(credentialId);
+    if (current.keyVersion !== SUPPORTED_CREDENTIAL_KEY_VERSION)
+      throw new ApplicationError(
+        "The provider credential uses an unsupported encryption key version",
+        "conflict",
+        409,
+      );
     const key = requireEncryptionKey(options);
     const encryptedValue = encryptCredentialEnvelope(parsed.data.secret, key, {
       workspaceId: current.workspaceId,
@@ -813,7 +820,7 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
     });
     const row = await repository.updateSecret(credentialId, {
       encryptedValue,
-      keyVersion: current.keyVersion,
+      keyVersion: SUPPORTED_CREDENTIAL_KEY_VERSION,
     });
     return envelope(c, credentialResource(row), c.get("requestId"));
   };
