@@ -5,6 +5,7 @@ import {
   createBuiltinProviderRegistry,
   ProviderCatalog,
 } from "../../../packages/provider-server/src/index.js";
+import { createOpenAiCompatibleModelDriver } from "../../../packages/providers/model-openai-compatible/src/index.js";
 import { DurableWorker } from "../../worker/src/runner.js";
 import { WorkerProviderRuntime } from "../../worker/src/providers.js";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
@@ -72,11 +73,11 @@ describe.skipIf(!integration)("OpenMuse bounded chat PostgreSQL integration", ()
     return body.token ?? "";
   }
 
-  function createClient(token: string): OpenMuseClient {
+  function createClient(token: string, targetApi = api): OpenMuseClient {
     return createApiClient({
       baseUrl: "http://localhost:8787",
       getAccessToken: () => token,
-      fetch: async (input, init) => api.request(input, init),
+      fetch: async (input, init) => targetApi.request(input, init),
     });
   }
 
@@ -192,6 +193,180 @@ describe.skipIf(!integration)("OpenMuse bounded chat PostgreSQL integration", ()
     });
     expect(deterministic.isDefault).toBe(true);
     expect(deterministic.requiredSecrets).toEqual([]);
+  });
+
+  it("keeps incomplete BYOK instances unrunnable and executes a bound fake OpenAI provider", async () => {
+    const endpoint = "https://operator.example/v1";
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fakeRegistry = createBuiltinProviderRegistry();
+    fakeRegistry.register(
+      createOpenAiCompatibleModelDriver({
+        providerId: "review-openai",
+        defaultEndpoint: endpoint,
+        fetch: async (input, init) => {
+          calls.push({ input, init });
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: { role: "assistant", content: "fake BYOK response" },
+                  finish_reason: "stop",
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 2 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    );
+    const fakeApi = createApi({
+      db: harness.runtime,
+      auth,
+      allowedOrigins: [origin],
+      providerCatalog: new ProviderCatalog(fakeRegistry, { trustedEndpoints: [endpoint] }),
+      credentialEncryptionKey: encryptionKey,
+    });
+    const fakeClient = createClient(bearerTokenA, fakeApi);
+
+    await expect(
+      fakeClient.createProviderInstance({
+        providerId: "review-openai",
+        module: "model",
+        scope: "workspace",
+        displayName: "Incomplete default",
+        config: { endpoint, stream: false },
+        isDefault: true,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "provider_auth_required" });
+    await expect(
+      fakeClient.createProviderInstance({
+        providerId: "review-openai",
+        module: "model",
+        scope: "workspace",
+        displayName: "Raw secret attempt",
+        config: { endpoint, stream: false, apiKeySecret: "raw-key-must-not-persist" },
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "invalid_request" });
+
+    const instance = await fakeClient.createProviderInstance({
+      providerId: "review-openai",
+      module: "model",
+      scope: "workspace",
+      displayName: "Fake BYOK model",
+      config: { endpoint, stream: false },
+    });
+    expect(instance.requiredSecrets).toEqual([
+      { name: "apiKeySecret", required: true, configured: false },
+    ]);
+    const clientMessageId = `incomplete-byok-${harness.databaseName}`;
+    await expect(
+      fakeClient.sendMessage({
+        conversationId: harness.ids.conversation,
+        clientMessageId,
+        providerInstanceId: instance.id,
+        parts: [{ type: "text", text: "must fail before a provider call" }],
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "provider_auth_required" });
+    expect(calls).toHaveLength(0);
+
+    const credential = await fakeClient.createProviderCredential({
+      providerId: "review-openai",
+      providerInstanceId: instance.id,
+      credentialKind: "apiKeySecret",
+      scope: "workspace",
+      secret: "fake-byok-secret-never-returned",
+    });
+    const configured = await fakeClient.updateProviderInstance(instance.id, {
+      credentialBindings: [{ name: "apiKeySecret", credentialId: credential.id }],
+      expectedConfigDigest: instance.configDigest,
+    });
+    expect(configured.requiredSecrets).toEqual([
+      { name: "apiKeySecret", required: true, configured: true },
+    ]);
+
+    const [storedInstance] = await harness.owner.sql<
+      { config: Record<string, unknown>; credential_bindings: unknown }[]
+    >`
+      select config, credential_bindings
+      from provider_instances
+      where id = ${instance.id}
+    `;
+    expect(storedInstance?.config.apiKeySecret).toBe(credential.id);
+    expect(JSON.stringify(storedInstance)).not.toContain("fake-byok-secret-never-returned");
+
+    const submitted = await fakeClient.sendMessage({
+      conversationId: harness.ids.conversation,
+      clientMessageId: `bound-byok-${harness.databaseName}`,
+      providerInstanceId: instance.id,
+      parts: [{ type: "text", text: "execute through the fake transport" }],
+    });
+    expect(submitted.run.providerInstanceId).toBe(instance.id);
+    const [storedRun] = await harness.owner.sql<
+      { provider_config: Record<string, unknown>; provider_credential_bindings: unknown }[]
+    >`
+      select provider_config, provider_credential_bindings
+      from runs
+      where id = ${submitted.run.id}
+    `;
+    expect(storedRun?.provider_config.apiKeySecret).toBe(credential.id);
+    expect(JSON.stringify(storedRun)).not.toContain("fake-byok-secret-never-returned");
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
+    const providerRuntime = new WorkerProviderRuntime({
+      db: harness.runtime.db,
+      encryptionKey,
+      registry: fakeRegistry,
+      endpointPolicy: { trustedEndpoints: [endpoint] },
+    });
+    const worker = new DurableWorker(harness.runtime, {
+      workerId: `byok-integration-worker-${harness.databaseName}`,
+      scopes: [{ workspaceId: harness.ids.workspace, actorId: harness.ids.userA }],
+      handlers: [
+        new ConversationTaskHandler({
+          db: harness.runtime.db,
+          resolveModel: (payload, context, task) =>
+            providerRuntime.resolveModel(payload, context, task),
+        }),
+      ],
+      pollMs: 50,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    const workerRun = worker.run();
+    try {
+      const completed = await waitForRun(
+        fakeClient,
+        submitted.run.id,
+        (run) => run.status === "succeeded",
+      );
+      expect(completed.status).toBe("succeeded");
+    } finally {
+      worker.stop("BYOK integration complete");
+      await workerRun;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
+    expect(calls).toHaveLength(1);
+    expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe(
+      "Bearer fake-byok-secret-never-returned",
+    );
+    expect(JSON.stringify(calls[0]?.init?.body)).not.toContain("fake-byok-secret-never-returned");
+
+    await fakeClient.updateProviderInstance(instance.id, { isDefault: true });
+    await fakeClient.deleteProviderCredential(credential.id);
+    const revoked = await fakeClient.getProviderInstance(instance.id);
+    expect(revoked.isDefault).toBe(false);
+    const [deterministic] = await harness.owner.sql<{ id: string }[]>`
+      select id
+      from provider_instances
+      where provider_id = 'deterministic' and module = 'model'
+      order by created_at desc
+      limit 1
+    `;
+    if (deterministic) await clientA.updateProviderInstance(deterministic.id, { isDefault: true });
   });
 
   it("fails closed for unsupported credential versions and unbound legacy credentials", async () => {

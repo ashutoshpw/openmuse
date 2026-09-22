@@ -313,6 +313,8 @@ export interface ProviderRuntimeOptions {
   deterministic?: boolean;
   deterministicResponse?: string;
   endpointPolicy?: ProviderEndpointPolicy;
+  /** Test and embedded runtimes may supply an explicitly registered provider set. */
+  registry?: ProviderRegistry;
 }
 
 interface SelectedProviderInstance {
@@ -332,12 +334,14 @@ export class WorkerProviderRuntime {
   constructor(private readonly options: ProviderRuntimeOptions) {
     if (options.deterministic && process.env.NODE_ENV !== "test")
       throw new Error("Deterministic provider mode is test-only");
-    this.registry = createBuiltinProviderRegistry({
-      ...(options.deterministic === undefined ? {} : { deterministic: options.deterministic }),
-      ...(options.deterministicResponse === undefined
-        ? {}
-        : { deterministicResponse: options.deterministicResponse }),
-    });
+    this.registry =
+      options.registry ??
+      createBuiltinProviderRegistry({
+        ...(options.deterministic === undefined ? {} : { deterministic: options.deterministic }),
+        ...(options.deterministicResponse === undefined
+          ? {}
+          : { deterministicResponse: options.deterministicResponse }),
+      });
     this.catalog = new ProviderCatalog(this.registry, options.endpointPolicy);
   }
 
@@ -436,6 +440,11 @@ export class WorkerProviderRuntime {
         catalogEntry.configVersion !== run.providerConfigVersion
       )
         throw new Error("The pinned provider build is unavailable");
+      assertPinnedProviderCredentials(
+        catalogEntry,
+        run.providerConfig as Record<string, unknown>,
+        bindings,
+      );
       const expectedDigest = this.catalog.digest({
         module: run.providerModule as ProviderModule,
         providerId: run.providerId,
@@ -513,13 +522,46 @@ function isPinnedBinding(
   );
 }
 
+function assertPinnedProviderCredentials(
+  provider: ProviderCatalogEntry,
+  config: Record<string, unknown>,
+  bindings: readonly { name: string; credentialId: string; revision: number }[],
+): void {
+  const declaredNames = new Set(provider.requiredSecrets.map((secret) => secret.name));
+  const byName = new Map<string, (typeof bindings)[number]>();
+  for (const binding of bindings) {
+    if (
+      !declaredNames.has(binding.name) ||
+      binding.credentialId.startsWith("pending:") ||
+      byName.has(binding.name)
+    )
+      throw new Error("The pinned provider credential bindings are invalid");
+    byName.set(binding.name, binding);
+  }
+  for (const secret of provider.requiredSecrets) {
+    const binding = byName.get(secret.name);
+    const configured = config[secret.name];
+    if (
+      secret.required &&
+      (!binding || configured !== binding.credentialId || String(configured).startsWith("pending:"))
+    )
+      throw new Error("The pinned provider credentials are incomplete");
+    if (configured !== undefined && (!binding || configured !== binding.credentialId))
+      throw new Error("The pinned provider credential reference is invalid");
+  }
+}
+
 function applyCredentialBindings(
   config: Record<string, unknown>,
   bindings: readonly { name: string; credentialId: string; revision: number }[],
 ): Record<string, unknown> {
   const next = { ...config };
   for (const binding of bindings) {
-    if (!binding.name.trim() || !binding.credentialId.trim())
+    if (
+      !binding.name.trim() ||
+      !binding.credentialId.trim() ||
+      binding.credentialId.startsWith("pending:")
+    )
       throw new Error("A provider credential binding is invalid");
     next[binding.name] = binding.credentialId;
   }
@@ -551,6 +593,8 @@ class DatabaseSecretResolver implements ProviderSecretResolver {
 
   async resolve(reference: string, signal?: AbortSignal): Promise<string> {
     if (signal?.aborted) throw signal.reason ?? new Error("Secret resolution was cancelled");
+    if (reference.startsWith("pending:"))
+      throw new Error("The provider credential is not configured");
     if (!this.encryptionKey)
       throw new Error("CREDENTIAL_ENCRYPTION_KEY is required for provider execution");
     const binding = this.allowedCredentialBindings.find((item) => item.credentialId === reference);

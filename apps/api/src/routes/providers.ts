@@ -119,6 +119,69 @@ function normalizeConfig(
   }
 }
 
+const PENDING_SECRET_PREFIX = "pending:";
+
+function assertNoSecretConfigOverrides(
+  entry: ProviderCatalogEntry,
+  raw: Record<string, unknown>,
+): void {
+  const secretNames = new Set(entry.requiredSecrets.map((secret) => secret.name));
+  if (Object.keys(raw).some((name) => secretNames.has(name)))
+    throw new ApplicationError(
+      "Provider credentials must be supplied through credentialBindings",
+      "invalid_request",
+      400,
+    );
+}
+
+function configWithCredentialReferences(
+  catalog: ProviderCatalog,
+  entry: ProviderCatalogEntry,
+  raw: Record<string, unknown>,
+  bindings: readonly ProviderBinding[],
+): Record<string, unknown> {
+  const candidate = { ...raw };
+  for (const secret of entry.requiredSecrets) {
+    delete candidate[secret.name];
+    const binding = bindings.find((item) => item.name === secret.name);
+    if (binding) candidate[secret.name] = binding.credentialId;
+    else if (secret.required) candidate[secret.name] = `${PENDING_SECRET_PREFIX}${secret.name}`;
+  }
+  return normalizeConfig(catalog, entry.module, entry.providerId, candidate);
+}
+
+function assertBindingNames(
+  entry: ProviderCatalogEntry,
+  bindings: readonly { name: string; credentialId: string }[],
+): void {
+  const names = new Set(entry.requiredSecrets.map((secret) => secret.name));
+  for (const binding of bindings) {
+    if (!names.has(binding.name))
+      throw new ApplicationError(
+        `Credential binding ${binding.name} is not declared by the provider`,
+        "invalid_request",
+        400,
+      );
+  }
+}
+
+function assertReadyForDefault(
+  entry: ProviderCatalogEntry,
+  bindings: readonly ProviderBinding[],
+): void {
+  const missing = entry.requiredSecrets.some(
+    (secret) =>
+      secret.required &&
+      !bindings.some((binding) => binding.name === secret.name && binding.revision > 0),
+  );
+  if (missing)
+    throw new ApplicationError(
+      "Provider credentials must be configured before selecting a default provider",
+      "provider_auth_required",
+      409,
+    );
+}
+
 function pageInput(c: ApiContext, kind: "instances" | "credentials") {
   const bool = c.req.query("includeUnavailable");
   const raw = {
@@ -473,7 +536,8 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
       throw new ApplicationError("Invalid provider instance input", "invalid_request", 400);
     const resolvedWorkspace = await resolveWorkspace(c, options, workspaceId);
     const entry = catalogEntry(catalog, parsed.data.module, parsed.data.providerId);
-    const config = normalizeConfig(catalog, entry.module, entry.providerId, parsed.data.config);
+    assertNoSecretConfigOverrides(entry, parsed.data.config);
+    assertBindingNames(entry, parsed.data.credentialBindings);
     const id = randomUUID();
     const scoped = new ScopedDatabase(options.db.db, {
       workspaceId: resolvedWorkspace,
@@ -485,6 +549,8 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
       entry.providerId,
       parsed.data.credentialBindings,
     );
+    if (parsed.data.isDefault) assertReadyForDefault(entry, bindings);
+    const config = configWithCredentialReferences(catalog, entry, parsed.data.config, bindings);
     const row = await new ProviderInstanceRepository(scoped).create({
       id,
       providerId: entry.providerId,
@@ -568,14 +634,31 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
     const id = routeParam(c, "providerInstanceId");
     const current = await repository.getForMutation(id);
     const entry = catalogEntry(catalog, current.module as ProviderModule, current.providerId);
-    const config =
+    if (parsed.data.config !== undefined) assertNoSecretConfigOverrides(entry, parsed.data.config);
+    let bindings = current.credentialBindings;
+    if (parsed.data.credentialBindings !== undefined) {
+      assertBindingNames(entry, parsed.data.credentialBindings);
+      bindings = await resolveBindings(
+        scoped,
+        id,
+        entry.providerId,
+        parsed.data.credentialBindings,
+      );
+    }
+    const currentIsDefault = await repository.isDefault(id);
+    const remainsDefault =
+      parsed.data.isDefault === true || (currentIsDefault && parsed.data.isDefault !== false);
+    if (parsed.data.credentialBindings === undefined && remainsDefault)
+      bindings = await resolveBindings(scoped, id, entry.providerId, bindings);
+    if (remainsDefault) assertReadyForDefault(entry, bindings);
+    const config = configWithCredentialReferences(
+      catalog,
+      entry,
       parsed.data.config === undefined
         ? current.config
-        : normalizeConfig(catalog, entry.module, entry.providerId, parsed.data.config);
-    const bindings =
-      parsed.data.credentialBindings === undefined
-        ? current.credentialBindings
-        : await resolveBindings(scoped, id, entry.providerId, parsed.data.credentialBindings);
+        : { ...current.config, ...parsed.data.config },
+      bindings,
+    );
     const changed =
       parsed.data.config !== undefined || parsed.data.credentialBindings !== undefined;
     const row = await repository.update(id, {

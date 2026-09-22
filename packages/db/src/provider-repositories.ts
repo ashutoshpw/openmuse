@@ -544,6 +544,10 @@ export class ProviderCredentialRepository {
             eq(providerCredentials.workspaceId, this.scope.workspaceId),
           ),
         );
+      if (current.providerInstanceId)
+        await tx
+          .delete(providerInstanceDefaults)
+          .where(eq(providerInstanceDefaults.providerInstanceId, current.providerInstanceId));
     });
   }
 

@@ -20,6 +20,7 @@ import {
   ApprovalRepository,
   ChatSubmissionRepository,
   ConversationRepository,
+  ProviderCredentialRepository,
   ProviderInstanceRepository,
   RepositoryError,
   RunRepository,
@@ -63,6 +64,7 @@ export interface ProviderCatalogLike {
     version: string;
     configVersion: string;
     buildDigest: string;
+    requiredSecrets: readonly { name: string; required: boolean }[];
   };
   digest(input: {
     module: string;
@@ -139,6 +141,46 @@ function isProviderBinding(value: unknown): value is ProviderBinding {
     Number.isInteger((value as { revision: number }).revision) &&
     (value as { revision: number }).revision > 0
   );
+}
+
+function assertProviderCredentialsConfigured(
+  provider: {
+    requiredSecrets: readonly { name: string; required: boolean }[];
+  },
+  config: Record<string, unknown>,
+  bindings: readonly ProviderBinding[],
+): void {
+  const declaredNames = new Set(provider.requiredSecrets.map((secret) => secret.name));
+  const byName = new Map(bindings.map((binding) => [binding.name, binding]));
+  if (
+    bindings.some(
+      (binding) => !declaredNames.has(binding.name) || binding.credentialId.startsWith("pending:"),
+    )
+  )
+    throw new ApplicationError(
+      "Provider credential bindings are invalid",
+      "provider_auth_required",
+      409,
+    );
+  for (const secret of provider.requiredSecrets) {
+    const binding = byName.get(secret.name);
+    const configured = config[secret.name];
+    if (
+      secret.required &&
+      (!binding || configured !== binding.credentialId || String(configured).startsWith("pending:"))
+    )
+      throw new ApplicationError(
+        "The selected provider is not configured with an active credential",
+        "provider_auth_required",
+        409,
+      );
+    if (configured !== undefined && (!binding || configured !== binding.credentialId))
+      throw new ApplicationError(
+        "The selected provider credential reference is invalid",
+        "provider_auth_required",
+        409,
+      );
+  }
 }
 
 function toWorkspace(
@@ -487,6 +529,8 @@ export class OpenMuseApplication {
         "provider_auth_required",
         409,
       );
+    assertProviderCredentialsConfigured(catalog, row.config, bindings);
+    await this.assertActiveProviderCredentials(row.id, row.providerId, bindings);
     const configDigest = this.options.providerCatalog.digest({
       module: row.module,
       providerId: row.providerId,
@@ -513,6 +557,39 @@ export class OpenMuseApplication {
       credentialBindings: bindings,
       configDigest,
     };
+  }
+
+  private async assertActiveProviderCredentials(
+    providerInstanceId: string,
+    providerId: string,
+    bindings: readonly ProviderBinding[],
+  ): Promise<void> {
+    const credentials = new ProviderCredentialRepository(this.scoped);
+    for (const binding of bindings) {
+      let credential: Awaited<ReturnType<ProviderCredentialRepository["get"]>>;
+      try {
+        credential = await credentials.get(binding.credentialId);
+      } catch (error) {
+        if (error instanceof RepositoryError)
+          throw new ApplicationError(
+            "The selected provider is not configured with an active credential",
+            "provider_auth_required",
+            409,
+          );
+        throw error;
+      }
+      if (
+        credential.status !== "active" ||
+        credential.provider !== providerId ||
+        credential.providerInstanceId !== providerInstanceId ||
+        credential.secretRevision !== binding.revision
+      )
+        throw new ApplicationError(
+          "The selected provider is not configured with an active credential",
+          "provider_auth_required",
+          409,
+        );
+    }
   }
 
   private async assertOwnedArtifacts(input: SendMessageInput): Promise<void> {
