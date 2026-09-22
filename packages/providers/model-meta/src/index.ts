@@ -6,17 +6,24 @@ import {
 
 export interface MetaModelDriverOptions extends Omit<
   OpenAiCompatibleDriverOptions,
-  "providerId" | "displayName" | "defaultEndpoint"
+  "providerId" | "displayName" | "defaultEndpoint" | "defaultModel"
 > {
   defaultEndpoint?: string;
+  defaultModel?: string;
 }
 
-/** Meta's compatibility endpoint is intentionally adapted through HTTP, not a vendor SDK. */
+/**
+ * Meta Model API documents the base URL and Muse Spark models here:
+ * https://ai.developer.meta.com/docs/overview
+ * https://ai.developer.meta.com/docs/models
+ * https://ai.developer.meta.com/docs/protocols/chat-completions
+ */
 export function createMetaModelDriver(options: MetaModelDriverOptions = {}): ModelDriver {
   return createOpenAiCompatibleModelDriver({
     ...options,
     providerId: "meta-llama",
-    displayName: "Meta Llama model",
-    defaultEndpoint: options.defaultEndpoint ?? "https://api.llama.com/compat/v1",
+    displayName: "Meta Muse model",
+    defaultEndpoint: options.defaultEndpoint ?? "https://api.meta.ai/v1",
+    defaultModel: options.defaultModel ?? "muse-spark-1.3",
   });
 }

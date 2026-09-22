@@ -34,16 +34,17 @@ export interface OpenAiCompatibleDriverOptions {
   providerId?: string;
   displayName?: string;
   defaultEndpoint?: string;
+  defaultModel?: string;
   fetch?: FetchLike;
   artifactResolver?: ArtifactResolver;
 }
 
-const configSchema = z
+const configInputSchema = z
   .object({
-    endpoint: z.string().url().default("https://api.openai.com/v1"),
+    endpoint: z.string().url().optional(),
     apiKeySecret: z.string().trim().min(1),
     organization: z.string().trim().min(1).optional(),
-    defaultModel: z.string().trim().min(1).default("gpt-4o-mini"),
+    defaultModel: z.string().trim().min(1).optional(),
     stream: z.boolean().default(true),
     maxResponseBytes: z
       .number()
@@ -65,6 +66,14 @@ const configSchema = z
       .default(120_000),
   })
   .strict();
+
+function configSchema(defaultEndpoint: string, defaultModel: string) {
+  return configInputSchema.transform((value) => ({
+    ...value,
+    endpoint: value.endpoint ?? defaultEndpoint,
+    defaultModel: value.defaultModel ?? defaultModel,
+  }));
+}
 
 function context(
   providerId: string,
@@ -275,6 +284,7 @@ export function createOpenAiCompatibleModelDriver(
   const providerId = options.providerId ?? "openai-compatible";
   const displayName = options.displayName ?? "OpenAI-compatible model";
   const defaultEndpoint = options.defaultEndpoint ?? "https://api.openai.com/v1";
+  const defaultModel = options.defaultModel ?? "gpt-4o-mini";
   return {
     module: "model",
     providerId,
@@ -292,10 +302,10 @@ export function createOpenAiCompatibleModelDriver(
     },
     config: {
       version: "1",
-      schema: configSchema.transform((value) => ({
-        ...value,
-        endpoint: value.endpoint === "https://api.openai.com/v1" ? defaultEndpoint : value.endpoint,
-      })) as unknown as ProviderConfigDefinition<ModelConfig>["schema"],
+      schema: configSchema(
+        defaultEndpoint,
+        defaultModel,
+      ) as unknown as ProviderConfigDefinition<ModelConfig>["schema"],
     },
     async create(
       rawConfig: ModelConfig,
@@ -332,7 +342,16 @@ export function createOpenAiCompatibleModelDriver(
               operation,
             ),
             ...(request.tools
-              ? { tools: request.tools.map((tool) => ({ type: "function", function: tool })) }
+              ? {
+                  tools: request.tools.map((tool) => ({
+                    type: "function",
+                    function: {
+                      name: tool.name,
+                      ...(tool.description ? { description: tool.description } : {}),
+                      parameters: tool.inputSchema,
+                    },
+                  })),
+                }
               : {}),
             ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
             ...(request.maxOutputTokens !== undefined
@@ -491,5 +510,8 @@ export function createOpenAiCompatibleModelDriver(
   };
 }
 
-export { configSchema as openAiCompatibleConfigSchema };
+export const openAiCompatibleConfigSchema = configSchema(
+  "https://api.openai.com/v1",
+  "gpt-4o-mini",
+);
 export type { ArtifactResolver } from "./messages.js";
