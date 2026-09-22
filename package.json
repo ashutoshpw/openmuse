@@ -54,7 +54,7 @@
       "oxlint --fix",
       "oxfmt --check"
     ],
-    "*.{json,md,yml,yaml,css,sql}": [
+    "*.{json,md,yml,yaml,css}": [
       "oxfmt --check"
     ]
   },
