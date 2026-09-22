@@ -33,6 +33,10 @@
     "build": "turbo run build",
     "check": "bun run check:quality && bun run lint && bun run format:check && bun run typecheck && bun run test && bun run test:native && bun run build:native && bun run build"
   },
+  "dependencies": {
+    "@openmuse/auth": "workspace:*",
+    "@openmuse/db": "workspace:*"
+  },
   "devDependencies": {
     "@types/bun": "catalog:testing",
     "@types/node": "catalog:testing",

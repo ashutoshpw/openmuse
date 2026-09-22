@@ -4,6 +4,10 @@
   "workspaces": {
     "": {
       "name": "openmuse",
+      "dependencies": {
+        "@openmuse/auth": "workspace:*",
+        "@openmuse/db": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "catalog:testing",
         "@types/node": "catalog:testing",
