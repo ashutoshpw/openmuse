@@ -349,6 +349,48 @@ describe.skipIf(!integration)("OpenMuse goal CRUD PostgreSQL integration", () =>
     expect(status.body.data).toMatchObject({ status: "active", revision: 3 });
   });
 
+  it("keeps completed goals terminal", async () => {
+    const created = await requestJson<Envelope<GoalResource>>("/api/v1/goals", actorAToken, {
+      method: "POST",
+      body: {
+        workspaceId: harness.ids.workspace,
+        title: "Terminal goal",
+        instructions: "A completed goal must not be reactivated.",
+      },
+    });
+    expect(created.response.status).toBe(200);
+    const goal = created.body.data;
+    expect(goal?.status).toBe("draft");
+
+    const active = await requestJson<Envelope<GoalResource>>(
+      `/api/v1/goals/${goal?.id}/status`,
+      actorAToken,
+      { method: "POST", body: { expectedRevision: 1, status: "active" } },
+    );
+    expect(active.response.status).toBe(200);
+
+    const completed = await requestJson<Envelope<GoalResource>>(
+      `/api/v1/goals/${goal?.id}/status`,
+      actorAToken,
+      { method: "POST", body: { expectedRevision: 2, status: "completed" } },
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body.data).toMatchObject({ status: "completed", revision: 3 });
+
+    const attempts = await Promise.all([
+      requestJson<Envelope>(`/api/v1/goals/${goal?.id}/status`, actorAToken, {
+        method: "POST",
+        body: { expectedRevision: 3, status: "active" },
+      }),
+      requestJson<Envelope>(`/api/v1/goals/${goal?.id}/status`, actorAToken, {
+        method: "POST",
+        body: { expectedRevision: 3, status: "paused" },
+      }),
+    ]);
+    expect(attempts.map(({ response }) => response.status)).toEqual([400, 400]);
+    expect(attempts.every(({ body }) => body.error?.code === "invalid_request")).toBe(true);
+  });
+
   it("allows only one concurrent update and one concurrent status change per revision", async () => {
     const updates = await Promise.all([
       requestJson<Envelope<GoalResource>>(`/api/v1/goals/${goalId}`, actorAToken, {

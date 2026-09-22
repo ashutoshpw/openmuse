@@ -195,6 +195,69 @@ describe.skipIf(!integration)("OpenMuse bounded chat PostgreSQL integration", ()
     expect(deterministic.requiredSecrets).toEqual([]);
   });
 
+  it("does not execute a queued run after its provider instance is disabled", async () => {
+    const instance = await clientA.createProviderInstance({
+      providerId: "deterministic",
+      module: "model",
+      scope: "workspace",
+      displayName: "Queued disable fixture",
+      config: {},
+    });
+    const submitted = await clientA.sendMessage({
+      conversationId: harness.ids.conversation,
+      clientMessageId: `disabled-provider-${harness.databaseName}`,
+      providerInstanceId: instance.id,
+      parts: [{ type: "text", text: "This must not reach the disabled provider." }],
+    });
+    await clientA.updateProviderInstance(instance.id, { enabled: false });
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
+    const providerRuntime = new WorkerProviderRuntime({
+      db: harness.runtime.db,
+      deterministic: true,
+      deterministicResponse: "must not execute",
+    });
+    const worker = new DurableWorker(harness.runtime, {
+      workerId: `disabled-provider-worker-${harness.databaseName}`,
+      scopes: [{ workspaceId: harness.ids.workspace, actorId: harness.ids.userA }],
+      handlers: [
+        new ConversationTaskHandler({
+          db: harness.runtime.db,
+          resolveModel: (payload, context, task) =>
+            providerRuntime.resolveModel(payload, context, task),
+        }),
+      ],
+      pollMs: 50,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    const workerRun = worker.run();
+    try {
+      const failed = await waitForRun(clientA, submitted.run.id, (run) => run.status === "failed");
+      expect(failed.status).toBe("failed");
+    } finally {
+      worker.stop("disabled provider integration complete");
+      await workerRun;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
+
+    const events = await clientA.listRunEvents({ runId: submitted.run.id, limit: 100 });
+    expect(events.items.map((event) => event.type)).toEqual([
+      "run.created",
+      "run.started",
+      "run.failed",
+    ]);
+    const [assistant] = await harness.owner.sql<{ count: string }[]>`
+      select count(*)::text as count
+      from messages
+      where run_id = ${submitted.run.id} and role = 'assistant'
+    `;
+    expect(assistant?.count).toBe("0");
+  });
+
   it("keeps incomplete BYOK instances unrunnable and executes a bound fake OpenAI provider", async () => {
     const endpoint = "https://operator.example/v1";
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];

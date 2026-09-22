@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, exists, max, or, sql } from "drizzle-orm";
 import type { DbTransaction, ScopedDatabase } from "./context.js";
 import { hashPayload, RepositoryError } from "./repositories.js";
+import { assertProviderSnapshotInTransaction } from "./provider-validation.js";
 import {
   conversationMembers,
   conversations,
@@ -41,6 +42,13 @@ export class ChatSubmissionRepository {
     model?: string;
   }) {
     return this.scoped.run(async (tx) => {
+      if (input.provider)
+        await assertProviderSnapshotInTransaction(
+          tx,
+          this.scope.workspaceId,
+          this.scope.actorId,
+          input.provider,
+        );
       const requestHash = hashPayload({
         conversationId: input.conversationId,
         content: input.content,

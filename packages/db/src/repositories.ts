@@ -22,16 +22,9 @@ import {
   workspaceMembers,
   workspaces,
 } from "./schema.js";
+import { RepositoryError } from "./repository-error.js";
 
-export class RepositoryError extends Error {
-  constructor(
-    message: string,
-    readonly code: "not_found" | "forbidden" | "conflict" | "expired" | "invalid",
-  ) {
-    super(message);
-    this.name = "RepositoryError";
-  }
-}
+export { RepositoryError } from "./repository-error.js";
 
 function notFound(resource: string): never {
   throw new RepositoryError(`${resource} was not found`, "not_found");

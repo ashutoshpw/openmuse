@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { DbTransaction, ScopedDatabase } from "./context.js";
 import { RepositoryError } from "./repositories.js";
 import { providerCredentials, providerInstanceDefaults, providerInstances } from "./schema.js";
@@ -141,6 +141,13 @@ export class ProviderInstanceRepository {
         })
         .returning();
       if (!row) throw new RepositoryError("Provider instance could not be created", "conflict");
+      await assertCredentialBindingsInTransaction(tx, {
+        workspaceId: this.scope.workspaceId,
+        actorId: this.scope.actorId,
+        providerInstanceId: row.id,
+        providerId: row.providerId,
+        bindings: row.credentialBindings,
+      });
       if (input.isDefault) await this.setDefaultInTransaction(tx, row.id, input.scope, canAdmin);
       return row;
     });
@@ -195,10 +202,20 @@ export class ProviderInstanceRepository {
         )
         .returning();
       if (!row) notFound("Provider instance");
+      await assertCredentialBindingsInTransaction(tx, {
+        workspaceId: this.scope.workspaceId,
+        actorId: this.scope.actorId,
+        providerInstanceId: row.id,
+        providerId: row.providerId,
+        bindings: row.credentialBindings,
+      });
       if (input.isDefault !== undefined) {
         const scope: ProviderInstanceScope = row.userId === null ? "workspace" : "user";
         if (input.isDefault) await this.setDefaultInTransaction(tx, id, scope, canAdmin);
         else await this.clearDefaultInTransaction(tx, id, scope);
+      } else if (input.enabled === false) {
+        const scope: ProviderInstanceScope = row.userId === null ? "workspace" : "user";
+        await this.clearDefaultInTransaction(tx, id, scope);
       }
       return row;
     });
@@ -313,6 +330,8 @@ export class ProviderInstanceRepository {
     canAdmin: boolean,
   ): Promise<void> {
     const instance = await this.getReadable(tx, id);
+    if (instance.status !== "available")
+      invalid("Only an available provider instance can be selected as the default");
     if (scope === "workspace" && !canAdmin)
       forbidden("Workspace provider defaults require administrator access");
     if (scope === "user" && instance.userId !== this.scope.actorId)
@@ -506,6 +525,7 @@ export class ProviderCredentialRepository {
       const canAdmin = await this.canAdmin(tx);
       if (current.userId === null ? !canAdmin : current.userId !== this.scope.actorId)
         forbidden("Provider credential administration is required");
+      await lockCredentialInstance(tx, this.scope.workspaceId, current.providerInstanceId);
       const [updated] = await tx
         .update(providerCredentials)
         .set({
@@ -535,6 +555,7 @@ export class ProviderCredentialRepository {
       const canAdmin = await this.canAdmin(tx);
       if (current.userId === null ? !canAdmin : current.userId !== this.scope.actorId)
         forbidden("Provider credential administration is required");
+      await lockCredentialInstance(tx, this.scope.workspaceId, current.providerInstanceId);
       await tx
         .update(providerCredentials)
         .set({ status: "revoked", updatedAt: new Date() })
@@ -620,4 +641,71 @@ function toCredentialMutationMetadata(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+async function assertCredentialBindingsInTransaction(
+  tx: DbTransaction,
+  input: {
+    workspaceId: string;
+    actorId: string;
+    providerInstanceId: string;
+    providerId: string;
+    bindings: readonly ProviderBinding[];
+  },
+): Promise<void> {
+  if (input.bindings.length === 0) return;
+  const ids = input.bindings.map((binding) => binding.credentialId);
+  if (new Set(ids).size !== ids.length) invalid("Provider credential names must be unique");
+  const rows = await tx
+    .select()
+    .from(providerCredentials)
+    .where(
+      and(
+        eq(providerCredentials.workspaceId, input.workspaceId),
+        eq(providerCredentials.providerInstanceId, input.providerInstanceId),
+        eq(providerCredentials.provider, input.providerId),
+        eq(providerCredentials.status, "active"),
+        or(isNull(providerCredentials.userId), eq(providerCredentials.userId, input.actorId)),
+        inArray(providerCredentials.id, ids),
+      ),
+    )
+    .for("update");
+  if (
+    rows.length !== input.bindings.length ||
+    input.bindings.some(
+      (binding) =>
+        !rows.some(
+          (row) =>
+            row.id === binding.credentialId &&
+            row.secretRevision === binding.revision &&
+            row.credentialKind === binding.name,
+        ),
+    )
+  )
+    invalid("Provider credential bindings do not match their credential kinds");
+}
+
+/**
+ * Provider writers use one lock order: instance, then credential. Default
+ * selection locks the credential after the instance update; revoke/rotation
+ * takes the same instance lock before changing the credential and deleting
+ * defaults. This prevents a revoked credential from racing a default write.
+ */
+async function lockCredentialInstance(
+  tx: DbTransaction,
+  workspaceId: string,
+  providerInstanceId: string | null,
+) {
+  if (!providerInstanceId) return;
+  await tx
+    .select({ id: providerInstances.id })
+    .from(providerInstances)
+    .where(
+      and(
+        eq(providerInstances.id, providerInstanceId),
+        eq(providerInstances.workspaceId, workspaceId),
+      ),
+    )
+    .for("update")
+    .limit(1);
 }

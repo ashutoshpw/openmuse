@@ -702,6 +702,7 @@ export class OpenMuseApplication {
         credential.status !== "active" ||
         credential.provider !== providerId ||
         credential.providerInstanceId !== providerInstanceId ||
+        credential.credentialKind !== binding.name ||
         credential.secretRevision !== binding.revision
       )
         throw new ApplicationError(

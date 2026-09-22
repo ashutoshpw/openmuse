@@ -213,6 +213,8 @@ export class GoalRepository {
       const currentRevision = current.revision;
       if (currentRevision !== expectedRevision)
         throw new RepositoryError("Goal was changed concurrently", "conflict");
+      if (current.status === "completed" && status !== "completed")
+        invalid("Completed goals cannot be reactivated or paused");
       goalData(current);
       const [updated] = await tx
         .update(goals)

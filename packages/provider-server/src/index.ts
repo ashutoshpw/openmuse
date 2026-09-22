@@ -1,6 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { ProviderRegistry, type ProviderScope } from "@openmuse/core";
-import { ScopedDatabase, providerCredentials, runs, type OpenMuseDatabase } from "@openmuse/db";
+import {
+  ScopedDatabase,
+  providerCredentials,
+  providerInstances,
+  runs,
+  type OpenMuseDatabase,
+} from "@openmuse/db";
 import { and, eq, isNull, or } from "drizzle-orm";
 import type {
   ModelClient,
@@ -434,6 +440,21 @@ export class WorkerProviderRuntime {
         return undefined;
       if (run.providerInstanceId !== payload.providerInstanceId && payload.providerInstanceId)
         throw new Error("The task provider does not match the pinned run");
+      const [instance] = await tx
+        .select({ id: providerInstances.id })
+        .from(providerInstances)
+        .where(
+          and(
+            eq(providerInstances.id, run.providerInstanceId),
+            eq(providerInstances.workspaceId, task.workspaceId),
+            eq(providerInstances.providerId, run.providerId),
+            eq(providerInstances.module, "model"),
+            eq(providerInstances.status, "available"),
+            or(isNull(providerInstances.userId), eq(providerInstances.userId, task.requestedBy)),
+          ),
+        )
+        .limit(1);
+      if (!instance) throw new Error("The pinned model provider is no longer available");
       const rawBindings = run.providerCredentialBindings;
       const bindings = Array.isArray(rawBindings) ? rawBindings.filter(isPinnedBinding) : [];
       if (!Array.isArray(rawBindings) || bindings.length !== rawBindings.length)
@@ -632,7 +653,8 @@ class DatabaseSecretResolver implements ProviderSecretResolver {
         .limit(1);
       return rows[0];
     });
-    if (!row) throw new Error("The provider credential was rotated or revoked");
+    if (!row || row.credentialKind !== binding.name)
+      throw new Error("The provider credential was rotated, revoked, or mismatched");
     if (row.keyVersion !== SUPPORTED_CREDENTIAL_KEY_VERSION)
       throw new Error("The provider credential uses an unsupported encryption key version");
     return decryptCredentialEnvelope(row.encryptedValue, this.encryptionKey, {

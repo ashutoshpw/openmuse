@@ -165,6 +165,15 @@ function assertBindingNames(
   }
 }
 
+function assertCredentialKind(entry: ProviderCatalogEntry, credentialKind: string): void {
+  if (!entry.requiredSecrets.some((secret) => secret.name === credentialKind))
+    throw new ApplicationError(
+      "Credential kind is not declared by the selected provider",
+      "invalid_request",
+      400,
+    );
+}
+
 function assertReadyForDefault(
   entry: ProviderCatalogEntry,
   bindings: readonly ProviderBinding[],
@@ -412,6 +421,7 @@ async function resolveBindings(
     if (
       credential.provider !== providerId ||
       credential.providerInstanceId !== providerInstanceId ||
+      credential.credentialKind !== binding.name ||
       credential.status !== "active"
     )
       throw new ApplicationError(
@@ -837,6 +847,12 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
         "invalid_request",
         400,
       );
+    const catalog = catalogEntry(
+      requireCatalog(options),
+      instance.module as ProviderModule,
+      instance.providerId,
+    );
+    assertCredentialKind(catalog, parsed.data.credentialKind);
     const key = requireEncryptionKey(options);
     const createdBy = c.get("identity").userId;
     const encryptedValue = encryptCredentialEnvelope(parsed.data.secret, key, {

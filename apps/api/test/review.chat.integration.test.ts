@@ -315,6 +315,99 @@ describe.skipIf(!integration)("OpenMuse chat/provider adversarial PostgreSQL int
     expect(["rotation-a-secret", "rotation-b-secret"]).toContain(decrypted);
   });
 
+  it("rejects credential kinds that the selected provider does not declare", async () => {
+    const instance = await createProviderInstance(actorAToken, {
+      providerId: "openai-compatible",
+      module: "model",
+      scope: "user",
+      displayName: "Credential kind review",
+      config: {},
+    });
+    const created = await requestJson<Envelope<ProviderCredentialResource>>(
+      "/api/v1/provider-credentials",
+      actorAToken,
+      {
+        method: "POST",
+        body: {
+          providerId: "openai-compatible",
+          providerInstanceId: instance.id,
+          credentialKind: "undeclaredSecret",
+          scope: "user",
+          secret: "must-not-be-encrypted",
+        },
+      },
+    );
+    expect(created.response.status).toBe(400);
+    expect(created.body.error?.code).toBe("invalid_request");
+    const [stored] = await harness.owner.sql<{ count: string }[]>`
+      select count(*)::text as count
+      from provider_credentials
+      where provider_instance_id = ${instance.id}
+    `;
+    expect(stored?.count).toBe("0");
+  });
+
+  it("does not leave a revoked credential selected as a default during concurrent writes", async () => {
+    const instance = await createProviderInstance(actorAToken, {
+      providerId: "openai-compatible",
+      module: "model",
+      scope: "user",
+      displayName: "Default revoke race",
+      config: {},
+    });
+    const credential = await requestJson<Envelope<ProviderCredentialResource>>(
+      "/api/v1/provider-credentials",
+      actorAToken,
+      {
+        method: "POST",
+        body: {
+          providerId: "openai-compatible",
+          providerInstanceId: instance.id,
+          credentialKind: "apiKeySecret",
+          scope: "user",
+          secret: "default-race-secret",
+        },
+      },
+    );
+    expect(credential.response.status).toBe(200);
+    const credentialId = credential.body.data?.id;
+    expect(credentialId).toEqual(expect.any(String));
+    const configured = await requestJson<Envelope<ProviderInstanceResource>>(
+      `/api/v1/provider-instances/${instance.id}`,
+      actorAToken,
+      {
+        method: "PATCH",
+        body: {
+          credentialBindings: [{ name: "apiKeySecret", credentialId }],
+          expectedConfigDigest: instance.configDigest,
+        },
+      },
+    );
+    expect(configured.response.status).toBe(200);
+
+    const makeDefault = requestJson<Envelope<ProviderInstanceResource>>(
+      `/api/v1/provider-instances/${instance.id}`,
+      actorAToken,
+      { method: "PATCH", body: { isDefault: true } },
+    );
+    const revoke = requestRaw(`/api/v1/provider-credentials/${credentialId}`, actorAToken, {
+      method: "DELETE",
+    });
+    const [defaultResult, revokeResult] = await Promise.all([makeDefault, revoke]);
+    expect([200, 409]).toContain(defaultResult.response.status);
+    expect(revokeResult.status).toBe(204);
+
+    const [staleDefault] = await harness.owner.sql<{ count: string }[]>`
+      select count(*)::text as count
+      from provider_instance_defaults d
+      inner join provider_credentials c on c.provider_instance_id = d.provider_instance_id
+      where d.provider_instance_id = ${instance.id}
+        and c.id = ${credentialId}
+        and c.status = 'revoked'
+    `;
+    expect(staleDefault?.count).toBe("0");
+  });
+
   it("keeps the run provider snapshot pinned and makes same-key conflicting content fail closed", async () => {
     const conversation = await createConversation(
       actorAToken,
@@ -542,6 +635,24 @@ async function requestJson<T>(
     }),
   );
   return { response, body: (await response.json()) as T };
+}
+
+async function requestRaw(
+  path: string,
+  token: string,
+  init: { method?: string; body?: unknown } = {},
+): Promise<Response> {
+  return currentApi!.request(
+    request(path, {
+      method: init.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin: origin,
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+    }),
+  );
 }
 
 let currentApi: ReturnType<typeof createApi> | undefined;
