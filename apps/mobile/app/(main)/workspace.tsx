@@ -24,6 +24,7 @@ import {
 } from "../../src/components/Screen";
 import { LinkButton } from "../../src/components/LinkButton";
 import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
+import { runCurrent } from "../../src/data/current";
 import type { Conversation } from "../../src/data/model";
 import { useWorkspace } from "../../src/state";
 
@@ -69,16 +70,19 @@ function WorkspaceContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await apiPromise;
-      setLoading(true);
-      setError(null);
-      const result = await api.listConversations(workspace.id);
-      setConversations(result.items);
+      const result = await runCurrent(currentApi, (api) => api.listConversations(workspace.id));
+      if (result.status === "stale") return;
+      setConversations(result.value.items);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load conversations.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load conversations.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [apiPromise, workspace]);
 

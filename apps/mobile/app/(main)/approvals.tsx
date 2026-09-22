@@ -20,6 +20,7 @@ import {
   SectionHeader,
 } from "../../src/components/Screen";
 import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
+import { runCurrent } from "../../src/data/current";
 import type { Approval } from "../../src/data/model";
 import { useWorkspace } from "../../src/state";
 
@@ -78,16 +79,19 @@ function ApprovalsContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await apiPromise;
-      setLoading(true);
-      setError(null);
-      const result = await api.listApprovals(workspace.id);
-      setApprovals(result.items.filter((item) => item.status === "pending"));
+      const result = await runCurrent(currentApi, (api) => api.listApprovals(workspace.id));
+      if (result.status === "stale") return;
+      setApprovals(result.value.items.filter((item) => item.status === "pending"));
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load approvals.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load approvals.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [apiPromise, workspace]);
 

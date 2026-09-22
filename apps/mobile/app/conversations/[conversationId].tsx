@@ -18,7 +18,11 @@ import { ChatComposer } from "../../src/features/chat/ChatComposer";
 import { ChatTranscript } from "../../src/features/chat/ChatTranscript";
 import { useConversation } from "../../src/features/chat/useConversation";
 import { useLiveVoice, useRecordedVoice } from "../../src/features/voice/useVoice";
-import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
+import {
+  useAuthenticatedApi,
+  type AuthenticatedApiPromise,
+} from "../../src/data/useAuthenticatedApi";
+import { runCurrent } from "../../src/data/current";
 import type { Artifact, Attachment } from "../../src/data/model";
 import type { OpenMuseApi } from "../../src/data/api";
 import { useWorkspace } from "../../src/state";
@@ -75,7 +79,10 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
   const { workspace } = useWorkspace();
   const { conversation, parts, loading, sending, error, refresh, send, stop } =
     useConversation(conversationId);
-  const [api, setApi] = useState<OpenMuseApi | null>(null);
+  const [resolvedApi, setResolvedApi] = useState<{
+    promise: AuthenticatedApiPromise;
+    api: OpenMuseApi;
+  } | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -93,10 +100,10 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
     }
     void apiPromise
       .then((next) => {
-        if (active) setApi(next);
+        if (active && apiPromise.isCurrent()) setResolvedApi({ promise: apiPromise, api: next });
       })
       .catch(() => {
-        if (active) setApi(null);
+        if (active && apiPromise.isCurrent()) setResolvedApi(null);
       });
     return () => {
       active = false;
@@ -105,18 +112,24 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
 
   const loadResources = useCallback(async () => {
     if (!apiPromise) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
     try {
-      const client = await apiPromise;
-      const [nextAttachments, nextArtifacts] = await Promise.all([
-        client.listAttachments(conversationId),
-        client.listArtifacts(conversationId, workspaceId),
-      ]);
-      setAttachments(nextAttachments.items);
-      setArtifacts(nextArtifacts.items);
+      const result = await runCurrent(currentApi, async (client) => {
+        const [nextAttachments, nextArtifacts] = await Promise.all([
+          client.listAttachments(conversationId),
+          client.listArtifacts(conversationId, workspaceId),
+        ]);
+        return { nextAttachments, nextArtifacts };
+      });
+      if (result.status === "stale") return;
+      setAttachments(result.value.nextAttachments.items);
+      setArtifacts(result.value.nextArtifacts.items);
     } catch (cause: unknown) {
-      setResourceError(
-        cause instanceof Error ? cause.message : "Unable to load attachments and artifacts.",
-      );
+      if (currentApi.isCurrent())
+        setResourceError(
+          cause instanceof Error ? cause.message : "Unable to load attachments and artifacts.",
+        );
     }
   }, [apiPromise, conversationId, workspaceId]);
 
@@ -124,7 +137,7 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
     void Promise.resolve().then(() => loadResources());
   }, [loadResources]);
 
-  const activeApi = apiPromise ? api : null;
+  const activeApi = apiPromise && resolvedApi?.promise === apiPromise ? resolvedApi.api : null;
   const liveVoice = useLiveVoice({ api: activeApi, workspaceId, conversationId });
   const recordedVoice = useRecordedVoice({ api: activeApi, workspaceId, conversationId });
   const activeVoice = voiceMode === "live" ? liveVoice : recordedVoice;

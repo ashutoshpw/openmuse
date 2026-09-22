@@ -122,8 +122,9 @@ export function OverviewPage() {
     enabled: Boolean(workspace),
   });
   const approvalsQuery = useQuery({
-    queryKey: ["approvals"],
+    queryKey: ["approvals", workspace?.id],
     queryFn: () => api.listApprovals({ limit: 5 }),
+    enabled: Boolean(workspace),
   });
   const artifactsQuery = useQuery({
     queryKey: ["artifacts", workspace?.id],
@@ -521,6 +522,7 @@ function ShareConversationPanel({
   onClose: () => void;
 }) {
   const { api } = useOpenMuse();
+  const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
   const [recipientEmail, setRecipientEmail] = useState("");
   const [message, setMessage] = useState("");
@@ -534,7 +536,7 @@ function ShareConversationPanel({
       }),
     onSuccess: async () => {
       setMessage("Read-only access granted.");
-      await queryClient.invalidateQueries({ queryKey: ["shares"] });
+      await queryClient.invalidateQueries({ queryKey: ["shares", workspace?.id] });
     },
   });
   return (
@@ -605,12 +607,14 @@ export function ConversationPage() {
   const [runLabel, setRunLabel] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const conversationQuery = useQuery({
-    queryKey: ["conversation", conversationId],
+    queryKey: ["conversation", workspace?.id, conversationId],
     queryFn: () => api.getConversation(conversationId),
+    enabled: Boolean(workspace),
   });
   const messagesQuery = useQuery({
-    queryKey: ["messages", conversationId],
+    queryKey: ["messages", workspace?.id, conversationId],
     queryFn: () => api.listMessages(conversationId, { limit: 100 }),
+    enabled: Boolean(workspace),
   });
   const providersQuery = useQuery({
     queryKey: ["providers", "model", workspace?.id],
@@ -628,7 +632,9 @@ export function ConversationPage() {
       setDraft("");
       setAttachment(null);
       setComposerNotice("");
-      await queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["messages", workspace?.id, conversationId],
+      });
       if (!result.run) return;
       setRunLabel("Run queued · listening for updates");
       void (async () => {
@@ -639,7 +645,9 @@ export function ConversationPage() {
             if (event.type === "run.completed") setRunLabel("Run complete");
             if (event.type === "run.failed") setRunLabel("Run needs attention");
           }
-          await queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+          await queryClient.invalidateQueries({
+            queryKey: ["messages", workspace?.id, conversationId],
+          });
         } catch (cause: unknown) {
           setRunLabel(errorMessage(cause, "Run updates are unavailable; refresh to check status."));
         }
@@ -732,7 +740,9 @@ export function ConversationPage() {
               <Button
                 onClick={() => {
                   setRunLabel("");
-                  void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+                  void queryClient.invalidateQueries({
+                    queryKey: ["messages", workspace?.id, conversationId],
+                  });
                 }}
                 variant="quiet"
               >
@@ -1119,10 +1129,12 @@ function makeSchedule(
 
 export function ApprovalsPage() {
   const { api } = useOpenMuse();
+  const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: ["approvals"],
+    queryKey: ["approvals", workspace?.id],
     queryFn: () => api.listApprovals({ limit: 100 }),
+    enabled: Boolean(workspace),
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected =
@@ -1133,7 +1145,7 @@ export function ApprovalsPage() {
     mutationFn: ({ approval, decision }: { approval: Approval; decision: "approve" | "deny" }) =>
       api.decideApproval(approval.id, { decision, expectedDigest: approval.digest }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      await queryClient.invalidateQueries({ queryKey: ["approvals", workspace?.id] });
     },
   });
   return (
@@ -1692,8 +1704,9 @@ export function SettingsPage() {
     enabled: Boolean(workspace),
   });
   const sharesQuery = useQuery({
-    queryKey: ["shares"],
+    queryKey: ["shares", workspace?.id],
     queryFn: () => api.listShares({ limit: 100 }),
+    enabled: Boolean(workspace),
   });
   const conversationsQuery = useQuery({
     queryKey: ["conversations", workspace?.id],
@@ -1741,7 +1754,7 @@ export function SettingsPage() {
     onSuccess: async () => {
       setShareConversationId("");
       setShareRecipientEmail("");
-      await queryClient.invalidateQueries({ queryKey: ["shares"] });
+      await queryClient.invalidateQueries({ queryKey: ["shares", workspace?.id] });
     },
   });
   return (

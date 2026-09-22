@@ -21,6 +21,7 @@ import {
   SectionHeader,
 } from "../src/components/Screen";
 import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
+import { runCurrent } from "../src/data/current";
 import type { Memory } from "../src/data/model";
 import { useWorkspace } from "../src/state";
 
@@ -75,16 +76,19 @@ function MemoryContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await apiPromise;
-      setLoading(true);
-      setError(null);
-      const result = await api.listMemories(workspace.id);
-      setMemories(result.items.filter((item) => item.enabled));
+      const result = await runCurrent(currentApi, (api) => api.listMemories(workspace.id));
+      if (result.status === "stale") return;
+      setMemories(result.value.items.filter((item) => item.enabled));
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load workspace memory.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load workspace memory.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [apiPromise, workspace]);
 

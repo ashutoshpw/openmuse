@@ -22,6 +22,7 @@ import {
   SectionHeader,
 } from "../src/components/Screen";
 import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
+import { runCurrent } from "../src/data/current";
 import type { Artifact, Conversation, ShareSnapshot } from "../src/data/model";
 import { useWorkspace } from "../src/state";
 
@@ -89,24 +90,32 @@ function SharingContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await apiPromise;
-      setLoading(true);
-      setError(null);
-      const [nextShares, nextConversations, nextArtifacts] = await Promise.all([
-        api.listShares(workspace.id),
-        api.listConversations(workspace.id),
-        api.listArtifacts(workspace.id, workspace.id),
-      ]);
+      const result = await runCurrent(currentApi, async (api) => {
+        const [nextShares, nextConversations, nextArtifacts] = await Promise.all([
+          api.listShares(workspace.id),
+          api.listConversations(workspace.id),
+          api.listArtifacts(workspace.id, workspace.id),
+        ]);
+        return { nextShares, nextConversations, nextArtifacts };
+      });
+      if (result.status === "stale") return;
       setShares(
-        nextShares.items.filter((item) => !item.workspaceId || item.workspaceId === workspace.id),
+        result.value.nextShares.items.filter(
+          (item) => !item.workspaceId || item.workspaceId === workspace.id,
+        ),
       );
-      setConversations(nextConversations.items);
-      setArtifacts(nextArtifacts.items);
+      setConversations(result.value.nextConversations.items);
+      setArtifacts(result.value.nextArtifacts.items);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load read-only shares.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load read-only shares.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [apiPromise, workspace]);
 

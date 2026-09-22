@@ -22,6 +22,7 @@ import {
   SectionHeader,
 } from "../../src/components/Screen";
 import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
+import { runCurrent } from "../../src/data/current";
 import type { Goal } from "../../src/data/model";
 import { useWorkspace } from "../../src/state";
 
@@ -66,16 +67,19 @@ function GoalsContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await apiPromise;
-      setLoading(true);
-      setError(null);
-      const result = await api.listGoals(workspace.id);
-      setGoals(result.items);
+      const result = await runCurrent(currentApi, (api) => api.listGoals(workspace.id));
+      if (result.status === "stale") return;
+      setGoals(result.value.items);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load goals.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load goals.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [apiPromise, workspace]);
 

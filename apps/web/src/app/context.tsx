@@ -5,7 +5,6 @@ import {
   useContext,
   useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -27,10 +26,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [isSignedOut, setIsSignedOut] = useState(false);
-  const workspaceIdRef = useRef<string | undefined>(undefined);
-  const setWorkspaceId = useCallback((workspaceId: string | undefined) => {
-    workspaceIdRef.current = workspaceId;
-  }, []);
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>(undefined);
   const baseUrl =
     (import.meta.env.VITE_OPENMUSE_API_URL as string | undefined)?.replace(/\/$/, "") ||
     window.location.origin;
@@ -52,7 +48,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       // A successful sign-in may belong to a different account. Drop every
       // private query before asking the session query to repopulate it.
-      workspaceIdRef.current = undefined;
+      setWorkspaceId(undefined);
       queryClient.clear();
       setIsSignedOut(false);
     },
@@ -65,12 +61,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
     if (!response.ok && response.status !== 401)
       throw new Error("The session could not be closed.");
-    workspaceIdRef.current = undefined;
+    setWorkspaceId(undefined);
     queryClient.clear();
     setIsSignedOut(true);
   }, [baseUrl, queryClient]);
   const retrySession = useCallback(() => {
-    workspaceIdRef.current = undefined;
+    setWorkspaceId(undefined);
     queryClient.clear();
     setIsSignedOut(false);
   }, [queryClient]);
@@ -79,16 +75,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createApiClient({
         baseUrl,
         fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
-        getWorkspaceId: () => workspaceIdRef.current,
+        getWorkspaceId: () => workspaceId,
         onUnauthorized: () => {
           // Do not invalidate `session` from its own 401 handler: that can
           // create an unbounded refetch loop. Clearing the cache also prevents
           // an expired account's private data from remaining visible.
           queryClient.clear();
+          setWorkspaceId(undefined);
           setIsSignedOut(true);
         },
       }),
-    [baseUrl, queryClient],
+    [baseUrl, queryClient, workspaceId],
   );
   const value = useMemo<AppContextValue>(
     () => ({

@@ -3,11 +3,13 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
 import type { OpenMuseApi } from "./data/api";
+import { currentPromise, runCurrent } from "./data/current";
 import { OpenMuseApiError } from "./data/model";
 import type { Session, Workspace } from "./data/model";
 import { clearStoredSession, loadStoredSession, saveStoredSession } from "./data/session";
@@ -242,31 +244,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const sessionToken = session?.token ?? null;
   const authenticatedApi = useMemo(() => {
-    if (!session || !baseApi.api) return null;
-    return baseApi.api.withToken(session.token);
-  }, [baseApi.api, session]);
+    if (!baseApi.api || !sessionToken) return null;
+    return currentPromise(baseApi.api.withToken(sessionToken));
+  }, [baseApi.api, sessionToken]);
+
+  useLayoutEffect(() => {
+    authenticatedApi?.activate();
+    return () => {
+      authenticatedApi?.invalidate();
+    };
+  }, [authenticatedApi]);
   const sessionWorkspaceId = session?.workspaceId;
 
   const refresh = useCallback(async () => {
     if (!authenticatedApi) return;
+    const currentApi = authenticatedApi;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await authenticatedApi;
-      setLoading(true);
-      setError(null);
-      const result = await api.listWorkspaces();
-      setWorkspaces(result.items);
+      const result = await runCurrent(currentApi, (api) => api.listWorkspaces());
+      if (result.status === "stale") return;
+      setWorkspaces(result.value.items);
       setWorkspace((current) => {
-        if (current && result.items.some((item) => item.id === current.id)) return current;
+        if (current && result.value.items.some((item) => item.id === current.id)) return current;
         const preferred = sessionWorkspaceId
-          ? result.items.find((item) => item.id === sessionWorkspaceId)
+          ? result.value.items.find((item) => item.id === sessionWorkspaceId)
           : undefined;
-        return preferred ?? result.items[0] ?? null;
+        return preferred ?? result.value.items[0] ?? null;
       });
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load workspaces.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load workspaces.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [authenticatedApi, sessionWorkspaceId]);
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatPart, Conversation } from "../../data/model";
+import { runCurrent } from "../../data/current";
 import { useAuthenticatedApi } from "../../data/useAuthenticatedApi";
 
 function mergePart(parts: ChatPart[], next: ChatPart) {
@@ -19,13 +20,16 @@ export function useConversation(conversationId: string) {
 
   const refresh = useCallback(async () => {
     if (!apiPromise) return;
-    const api = await apiPromise;
-    const [nextConversation, nextParts] = await Promise.all([
-      api.getConversation(conversationId),
-      api.listChatParts(conversationId),
-    ]);
-    setConversation(nextConversation);
-    setParts(nextParts.items);
+    const result = await runCurrent(apiPromise, async (api) => {
+      const [nextConversation, nextParts] = await Promise.all([
+        api.getConversation(conversationId),
+        api.listChatParts(conversationId),
+      ]);
+      return { nextConversation, nextParts };
+    });
+    if (result.status === "stale") return;
+    setConversation(result.value.nextConversation);
+    setParts(result.value.nextParts.items);
   }, [apiPromise, conversationId]);
 
   useEffect(() => {

@@ -24,6 +24,7 @@ import {
   SectionHeader,
 } from "../src/components/Screen";
 import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
+import { runCurrent } from "../src/data/current";
 import type { ProviderConnection } from "../src/data/model";
 import { useSession, useWorkspace } from "../src/state";
 
@@ -109,20 +110,26 @@ function ProvidersWorkspaceContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
+    if (!currentApi.isCurrent()) return;
+    setLoading(true);
+    setError(null);
     try {
-      const api = await apiPromise;
-      setLoading(true);
-      setError(null);
-      const [available, connected] = await Promise.all([
-        api.listProviderCatalog(workspace.id),
-        api.listConnections(workspace.id),
-      ]);
-      setCatalog(available);
-      setConnections(connected.items);
+      const result = await runCurrent(currentApi, async (api) => {
+        const [available, connected] = await Promise.all([
+          api.listProviderCatalog(workspace.id),
+          api.listConnections(workspace.id),
+        ]);
+        return { available, connected };
+      });
+      if (result.status === "stale") return;
+      setCatalog(result.value.available);
+      setConnections(result.value.connected.items);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to load provider connections.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to load provider connections.");
     } finally {
-      setLoading(false);
+      setLoading((current) => (currentApi.isCurrent() ? false : current));
     }
   }, [apiPromise, workspace]);
 

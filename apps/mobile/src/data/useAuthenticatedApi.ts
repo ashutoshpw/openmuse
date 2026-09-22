@@ -1,14 +1,31 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
+import type { OpenMuseApi } from "./api";
+import { currentPromise, type CurrentPromise } from "./current";
 import { useApi, useSession, useWorkspace } from "../state";
 
-export function useAuthenticatedApi() {
+export type AuthenticatedApiPromise = CurrentPromise<OpenMuseApi>;
+
+export function useAuthenticatedApi(): AuthenticatedApiPromise | null {
   const { api: baseApi } = useApi();
   const { session } = useSession();
   const { workspace } = useWorkspace();
-  return useMemo(() => {
-    if (!baseApi || !session) return null;
-    return baseApi
-      .withToken(session.token)
-      .then((authenticatedApi) => authenticatedApi.withWorkspace(workspace?.id ?? null));
-  }, [baseApi, session, workspace?.id]);
+  const token = session?.token ?? null;
+  const workspaceId = workspace?.id ?? null;
+  const apiPromise = useMemo(() => {
+    if (!baseApi || !token) return null;
+    return currentPromise(
+      baseApi
+        .withToken(token)
+        .then((authenticatedApi) => authenticatedApi.withWorkspace(workspaceId)),
+    );
+  }, [baseApi, token, workspaceId]);
+
+  useLayoutEffect(() => {
+    apiPromise?.activate();
+    return () => {
+      apiPromise?.invalidate();
+    };
+  }, [apiPromise]);
+
+  return apiPromise;
 }
