@@ -311,7 +311,7 @@ export const taskLeases = pgTable(
       .references(() => tasks.id, { onDelete: "cascade" }),
     workerId: text("worker_id").notNull(),
     fenceToken: text("fence_token").notNull(),
-    acquiredAt: createdAt(),
+    acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull(),
   },

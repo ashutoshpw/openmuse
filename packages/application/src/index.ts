@@ -172,6 +172,27 @@ function toConversation(row: Awaited<ReturnType<ConversationRepository["get"]>>)
 }
 
 function toMessage(row: Awaited<ReturnType<ConversationRepository["appendUserMessage"]>>): Message {
+  const author: Message["author"] =
+    row.role === "assistant"
+      ? { type: "assistant" }
+      : row.role === "system"
+        ? { type: "system" }
+        : row.role === "tool"
+          ? {
+              type: "tool",
+              toolName:
+                (Array.isArray(row.content)
+                  ? row.content.find(
+                      (part): part is { type: "toolCall"; name: string } =>
+                        typeof part === "object" &&
+                        part !== null &&
+                        (part as { type?: unknown }).type === "toolCall" &&
+                        typeof (part as { name?: unknown }).name === "string",
+                    )
+                  : undefined
+                )?.name ?? "tool",
+            }
+          : { type: "user", userId: row.authorId ?? "unknown" };
   return {
     id: row.id,
     createdAt: row.createdAt.toISOString(),
@@ -180,7 +201,7 @@ function toMessage(row: Awaited<ReturnType<ConversationRepository["appendUserMes
     conversationId: row.conversationId,
     runId: row.runId ?? null,
     sequence: row.sequence,
-    author: { type: "user", userId: row.authorId ?? "unknown" },
+    author,
     parts: row.content as Message["parts"],
     status:
       row.status === "streaming"

@@ -109,7 +109,13 @@ export function createApi(options: ApiOptions) {
   });
 
   registerCoreRoutes(app, options);
-  registerProviderRoutes(app, options);
+  registerProviderRoutes(app, {
+    db: options.db,
+    ...(options.providerCatalog ? { catalog: options.providerCatalog } : {}),
+    ...(options.credentialEncryptionKey
+      ? { credentialEncryptionKey: options.credentialEncryptionKey }
+      : {}),
+  });
 
   app.get("/api/v1/sessions/current", (c) => {
     const identity = c.get("identity");
