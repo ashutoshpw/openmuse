@@ -29,6 +29,7 @@
         "@openmuse/auth": "workspace:*",
         "@openmuse/contracts": "workspace:*",
         "@openmuse/db": "workspace:*",
+        "@openmuse/provider-server": "workspace:*",
         "hono": "catalog:backend",
       },
       "devDependencies": {
@@ -81,6 +82,7 @@
       "name": "@openmuse/sandbox-service",
       "version": "0.1.0",
       "dependencies": {
+        "@openmuse/provider-contracts": "workspace:*",
         "@openmuse/provider-sandbox-docker": "workspace:*",
       },
       "devDependencies": {
@@ -126,6 +128,7 @@
         "@openmuse/provider-model-openai-compatible": "workspace:*",
         "@openmuse/provider-search-exa": "workspace:*",
         "@openmuse/provider-search-tavily": "workspace:*",
+        "@openmuse/provider-server": "workspace:*",
         "drizzle-orm": "catalog:",
       },
       "devDependencies": {
@@ -211,6 +214,27 @@
         "zod": "catalog:",
       },
     },
+    "packages/provider-server": {
+      "name": "@openmuse/provider-server",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openmuse/application": "workspace:*",
+        "@openmuse/core": "workspace:*",
+        "@openmuse/db": "workspace:*",
+        "@openmuse/provider-connector-appconnect": "workspace:*",
+        "@openmuse/provider-contracts": "workspace:*",
+        "@openmuse/provider-model-meta": "workspace:*",
+        "@openmuse/provider-model-ollama": "workspace:*",
+        "@openmuse/provider-model-openai-compatible": "workspace:*",
+        "@openmuse/provider-search-exa": "workspace:*",
+        "@openmuse/provider-search-tavily": "workspace:*",
+        "drizzle-orm": "catalog:backend",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:testing",
+        "oxlint": "catalog:tooling",
+      },
+    },
     "packages/provider-testkit": {
       "name": "@openmuse/provider-testkit",
       "version": "0.1.0",
@@ -239,6 +263,18 @@
       "version": "0.1.0",
       "dependencies": {
         "@openmuse/provider-contracts": "workspace:*",
+      },
+      "devDependencies": {
+        "vitest": "catalog:testing",
+      },
+    },
+    "packages/providers/media-openai": {
+      "name": "@openmuse/provider-media-openai",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openmuse/provider-contracts": "workspace:*",
+        "@openmuse/provider-http": "workspace:*",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "vitest": "catalog:testing",
@@ -282,8 +318,30 @@
         "vitest": "catalog:testing",
       },
     },
+    "packages/providers/sandbox-daytona": {
+      "name": "@openmuse/provider-sandbox-daytona",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openmuse/provider-contracts": "workspace:*",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "vitest": "catalog:testing",
+      },
+    },
     "packages/providers/sandbox-docker": {
       "name": "@openmuse/provider-sandbox-docker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openmuse/provider-contracts": "workspace:*",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "vitest": "catalog:testing",
+      },
+    },
+    "packages/providers/sandbox-e2b": {
+      "name": "@openmuse/provider-sandbox-e2b",
       "version": "0.1.0",
       "dependencies": {
         "@openmuse/provider-contracts": "workspace:*",
@@ -799,17 +857,25 @@
 
     "@openmuse/provider-http": ["@openmuse/provider-http@workspace:packages/providers/http"],
 
+    "@openmuse/provider-media-openai": ["@openmuse/provider-media-openai@workspace:packages/providers/media-openai"],
+
     "@openmuse/provider-model-meta": ["@openmuse/provider-model-meta@workspace:packages/providers/model-meta"],
 
     "@openmuse/provider-model-ollama": ["@openmuse/provider-model-ollama@workspace:packages/providers/model-ollama"],
 
     "@openmuse/provider-model-openai-compatible": ["@openmuse/provider-model-openai-compatible@workspace:packages/providers/model-openai-compatible"],
 
+    "@openmuse/provider-sandbox-daytona": ["@openmuse/provider-sandbox-daytona@workspace:packages/providers/sandbox-daytona"],
+
     "@openmuse/provider-sandbox-docker": ["@openmuse/provider-sandbox-docker@workspace:packages/providers/sandbox-docker"],
+
+    "@openmuse/provider-sandbox-e2b": ["@openmuse/provider-sandbox-e2b@workspace:packages/providers/sandbox-e2b"],
 
     "@openmuse/provider-search-exa": ["@openmuse/provider-search-exa@workspace:packages/providers/search-exa"],
 
     "@openmuse/provider-search-tavily": ["@openmuse/provider-search-tavily@workspace:packages/providers/search-tavily"],
+
+    "@openmuse/provider-server": ["@openmuse/provider-server@workspace:packages/provider-server"],
 
     "@openmuse/provider-testkit": ["@openmuse/provider-testkit@workspace:packages/provider-testkit"],
 

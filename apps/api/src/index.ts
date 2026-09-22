@@ -1,5 +1,6 @@
 import { createDatabase } from "@openmuse/db";
 import { createOpenMuseAuth } from "@openmuse/auth";
+import { createBuiltinProviderCatalog } from "@openmuse/provider-server";
 import { createApi } from "./app.js";
 
 const databaseUrl = Bun.env.DATABASE_URL;
@@ -17,6 +18,14 @@ if (!authDatabaseUrl) throw new Error("AUTH_DATABASE_URL is required");
 if (runtimeEnvironment === "production" && !Bun.env.AUTH_DATABASE_URL)
   throw new Error("AUTH_DATABASE_URL is required in production");
 if (!authSecret) throw new Error("AUTH_SECRET is required; no development bypass is available");
+const credentialEncryptionKey = Bun.env.CREDENTIAL_ENCRYPTION_KEY;
+if (runtimeEnvironment === "production" && !credentialEncryptionKey)
+  throw new Error("CREDENTIAL_ENCRYPTION_KEY is required in production");
+const trustedEndpoints = (Bun.env.PROVIDER_TRUSTED_ENDPOINTS ?? "")
+  .split(",")
+  .map((endpoint) => endpoint.trim())
+  .filter(Boolean);
+const providerCatalog = createBuiltinProviderCatalog({ trustedEndpoints });
 
 const db = createDatabase({ url: databaseUrl });
 // Better Auth runs without a tenant context, so it must use a dedicated
@@ -40,6 +49,8 @@ const api = createApi({
   db,
   auth,
   allowedOrigins: webOrigins,
+  providerCatalog,
+  ...(credentialEncryptionKey ? { credentialEncryptionKey } : {}),
 });
 
 const server = Bun.serve({

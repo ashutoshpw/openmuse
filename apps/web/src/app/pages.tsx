@@ -1540,8 +1540,27 @@ function ProviderSetupPanel({
   const existingInstance = provider.scope !== "system" && provider.workspaceId !== null;
   const saveMutation = useMutation({
     mutationFn: async () => {
+      const config = {
+        ...(endpoint.trim() ? { endpoint: endpoint.trim() } : {}),
+        ...(defaultModel.trim() ? { defaultModel: defaultModel.trim() } : {}),
+      };
+      // Credentials are attached to a concrete instance. Create an empty
+      // workspace instance first when configuring a system catalogue entry,
+      // then rotate/write secrets against that instance before pinning its
+      // bindings and digest.
+      const target = existingInstance
+        ? provider
+        : await api.createProviderInstance({
+            providerId: provider.providerId,
+            module: provider.module,
+            scope: "workspace",
+            ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
+            config,
+            credentialBindings: [],
+          });
       const credentials = await api.listProviderCredentials({
         providerId: provider.providerId,
+        providerInstanceId: target.id,
         scope: "workspace",
         limit: 100,
       });
@@ -1558,6 +1577,7 @@ function ProviderSetupPanel({
                 ? await api.updateProviderCredential(current.id, { secret: value })
                 : await api.createProviderCredential({
                     providerId: provider.providerId,
+                    providerInstanceId: target.id,
                     credentialKind: secret.name,
                     scope: "workspace",
                     secret: value,
@@ -1568,25 +1588,11 @@ function ProviderSetupPanel({
           }),
         )
       ).filter((binding): binding is { name: string; credentialId: string } => binding !== null);
-      const config = {
-        ...(endpoint.trim() ? { endpoint: endpoint.trim() } : {}),
-        ...(defaultModel.trim() ? { defaultModel: defaultModel.trim() } : {}),
-      };
-      if (existingInstance) {
-        return api.updateProviderInstance(provider.id, {
-          ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
-          config,
-          credentialBindings,
-          expectedConfigDigest: provider.configDigest,
-        });
-      }
-      return api.createProviderInstance({
-        providerId: provider.providerId,
-        module: provider.module,
-        scope: "workspace",
+      return api.updateProviderInstance(target.id, {
         ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
         config,
         credentialBindings,
+        expectedConfigDigest: target.configDigest,
       });
     },
     onSuccess: async () => {

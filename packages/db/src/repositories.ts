@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, exists, gt, inArray, isNull, lt, max, or, sql } from "drizzle-orm";
 import type { OpenMuseDatabase } from "./client.js";
 import type { DbTransaction, ScopedDatabase } from "./context.js";
+import { appendEventInTransaction } from "./chat-repository.js";
 import {
   approvals,
   auditEvents,
@@ -44,7 +45,7 @@ function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
   return `{${Object.keys(value as Record<string, unknown>)
-    .sort()
+    .toSorted()
     .map((key) => `${JSON.stringify(key)}:${canonicalize((value as Record<string, unknown>)[key])}`)
     .join(",")}}`;
 }
@@ -1098,26 +1099,33 @@ export class RunRepository {
   async appendEvent(runId: string, eventType: string, payload: unknown) {
     return this.scoped.run(async (tx) => {
       const [run] = await tx
-        .select({ id: runs.id })
+        .select({
+          id: runs.id,
+          currentEventSequence: runs.currentEventSequence,
+          status: runs.status,
+        })
         .from(runs)
         .where(and(eq(runs.id, runId), eq(runs.workspaceId, this.scope.workspaceId)))
+        .for("update")
         .limit(1);
       if (!run) notFound("Run");
-      const [last] = await tx
-        .select({ sequence: max(runEvents.sequence) })
-        .from(runEvents)
-        .where(eq(runEvents.runId, runId));
+      assertRunEventAllowed(run.status, eventType);
+      const sequence = run.currentEventSequence + 1;
       const [event] = await tx
         .insert(runEvents)
         .values({
           runId,
           workspaceId: this.scope.workspaceId,
-          sequence: (last?.sequence ?? 0) + 1,
+          sequence,
           eventType,
           payload,
         })
         .returning();
       if (!event) throw new RepositoryError("Run event could not be persisted", "conflict");
+      await tx
+        .update(runs)
+        .set({ currentEventSequence: sequence, updatedAt: new Date() })
+        .where(and(eq(runs.id, runId), eq(runs.workspaceId, this.scope.workspaceId)));
       return event;
     });
   }
@@ -1189,6 +1197,12 @@ export class RunRepository {
         )
         .returning();
       if (!run) return this.getInTransaction(tx, runId);
+      await appendEventInTransaction(tx, runId, this.scope.workspaceId, "run.cancelled", {
+        message:
+          run.error && typeof run.error === "object"
+            ? run.error.message
+            : "Run cancelled by the requester.",
+      });
       await tx
         .update(tasks)
         .set({
@@ -1256,6 +1270,11 @@ export class RunRepository {
             eq(runs.id, runId),
             eq(runs.workspaceId, this.scope.workspaceId),
             eq(runs.requestedBy, this.scope.actorId),
+            or(
+              eq(runs.status, "queued"),
+              eq(runs.status, "running"),
+              eq(runs.status, "waiting_approval"),
+            ),
           ),
         )
         .returning();
@@ -1277,6 +1296,36 @@ export class RunRepository {
       .limit(1);
     return run ?? notFound("Run");
   }
+}
+
+/**
+ * Events are part of the run state machine. In particular, a stale worker
+ * must not append progress or a second terminal result after cancellation.
+ * Terminal events are emitted only after their matching terminal status has
+ * been persisted by the same actor that owns the run.
+ */
+function assertRunEventAllowed(status: string, eventType: string): void {
+  if (status === "queued") {
+    if (eventType === "run.created") return;
+  } else if (status === "running") {
+    if (
+      eventType === "run.started" ||
+      eventType === "run.progress" ||
+      eventType === "message.created" ||
+      eventType === "message.delta" ||
+      eventType === "tool.call"
+    )
+      return;
+  } else if (status === "waiting_approval") {
+    if (eventType === "run.waiting_approval") return;
+  } else if (status === "succeeded") {
+    if (eventType === "message.completed" || eventType === "run.completed") return;
+  } else if (status === "failed" || status === "outcome_unknown") {
+    if (eventType === "run.failed") return;
+  } else if (status === "cancelled") {
+    if (eventType === "run.cancelled") return;
+  }
+  throw new RepositoryError(`Event ${eventType} is not valid for run status ${status}`, "conflict");
 }
 
 export async function recordAudit(

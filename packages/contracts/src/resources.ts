@@ -207,17 +207,20 @@ export const providerInstanceSchema = baseResourceSchema.extend({
   configDigest: digestSchema,
   capabilities: z.array(providerCapabilitySchema).max(100),
   requiredSecrets: z.array(providerSecretReferenceSchema).max(100),
+  isDefault: z.boolean(),
   metadata: jsonObjectSchema,
 });
 
 /** Credential metadata is safe to return; the encrypted or plaintext value is never exposed. */
 export const providerCredentialSchema = baseResourceSchema.extend({
   workspaceId: idSchema,
+  providerInstanceId: idSchema,
   scope: providerCredentialScopeSchema,
   ownerUserId: idSchema.nullable(),
   providerId: idSchema,
   credentialKind: safeNameSchema.max(128),
   keyVersion: z.number().int().positive(),
+  secretRevision: z.number().int().positive(),
   status: providerCredentialStatusSchema,
 });
 

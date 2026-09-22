@@ -11,6 +11,7 @@ import { ProviderOperationError } from "@openmuse/provider-contracts";
 import {
   ApprovalRepository,
   ConversationRepository,
+  RepositoryError,
   RunRepository,
   ScopedDatabase,
   type OpenMuseDatabase,
@@ -72,11 +73,22 @@ export class ConversationTaskHandler implements DurableTaskHandler {
     const conversations = new ConversationRepository(scoped);
     const runs = new RunRepository(scoped);
     const approvals = new ApprovalRepository(scoped);
-    await runs.updateStatus(payload.runId, "running");
-    await runs.appendEvent(payload.runId, "run.started", {
-      runId: payload.runId,
-      workspaceId: task.workspaceId,
-    });
+    const started = await runs.updateStatus(payload.runId, "running");
+    if (!started) {
+      const current = await getRunIfPresent(runs, payload.runId);
+      if (current?.status === "cancelled") return cancelledOutcome(current.error);
+      throw new Error("The conversation run could not be started");
+    }
+    try {
+      await runs.appendEvent(payload.runId, "run.started", {
+        runId: payload.runId,
+        workspaceId: task.workspaceId,
+      });
+    } catch (error) {
+      const current = await getRunIfPresent(runs, payload.runId);
+      if (current?.status === "cancelled") return cancelledOutcome(current.error);
+      throw error;
+    }
 
     let resolved: ResolvedModel | undefined;
     const assistantParts: MessagePart[] = [];
@@ -84,9 +96,9 @@ export class ConversationTaskHandler implements DurableTaskHandler {
     try {
       const sourceMessages = await conversations.listMessages(payload.conversationId);
       const request: ModelGenerateRequest = {
-        model: payload.model,
         messages: sourceMessages.map(toModelMessage),
-        tools: payload.tools ? [...payload.tools] : undefined,
+        ...(payload.model === undefined ? {} : { model: payload.model }),
+        ...(payload.tools === undefined ? {} : { tools: [...payload.tools] }),
       };
       resolved = await this.options.resolveModel(payload, context, task);
       const operationContext = {
@@ -123,14 +135,14 @@ export class ConversationTaskHandler implements DurableTaskHandler {
               arguments: event.arguments,
               providerInstanceId: resolved.providerInstanceId,
               providerId: resolved.providerId,
-              connectionId: payload.connectionId,
+              ...(payload.connectionId === undefined ? {} : { connectionId: payload.connectionId }),
             },
             toolCallId: event.callId,
-            connectionId: payload.connectionId,
+            ...(payload.connectionId === undefined ? {} : { connectionId: payload.connectionId }),
             target: {
               providerInstanceId: resolved.providerInstanceId,
               providerId: resolved.providerId,
-              connectionId: payload.connectionId,
+              ...(payload.connectionId === undefined ? {} : { connectionId: payload.connectionId }),
             },
             expiresAt: new Date((this.options.now?.() ?? new Date()).getTime() + 10 * 60_000),
           });
@@ -154,19 +166,42 @@ export class ConversationTaskHandler implements DurableTaskHandler {
           return { status: "waiting_approval", checkpoint: { approvalId: approval.id } };
         }
       }
+      if (await runIsCancelled(runs, payload.runId))
+        return cancelledOutcome({
+          code: "cancelled",
+          message: "Run cancelled by the requester.",
+        });
       if (assistantParts.length > 0) {
         const assistantMessage = await conversations.appendAssistantMessage({
           conversationId: payload.conversationId,
           runId: payload.runId,
           content: assistantParts,
         });
-        await runs.updateStatus(payload.runId, "succeeded", usage ? { usage } : undefined);
+        const completed = await runs.updateStatus(
+          payload.runId,
+          "succeeded",
+          usage ? { usage } : undefined,
+        );
+        if (!completed) {
+          const current = await getRunIfPresent(runs, payload.runId);
+          if (current?.status === "cancelled") return cancelledOutcome(current.error);
+          throw new Error("The conversation run could not be completed");
+        }
         await runs.appendEvent(payload.runId, "message.completed", {
           messageId: assistantMessage.id,
           parts: assistantParts,
         });
       } else {
-        await runs.updateStatus(payload.runId, "succeeded", usage ? { usage } : undefined);
+        const completed = await runs.updateStatus(
+          payload.runId,
+          "succeeded",
+          usage ? { usage } : undefined,
+        );
+        if (!completed) {
+          const current = await getRunIfPresent(runs, payload.runId);
+          if (current?.status === "cancelled") return cancelledOutcome(current.error);
+          throw new Error("The conversation run could not be completed");
+        }
         await runs.appendEvent(payload.runId, "message.completed", {
           messageId: payload.messageId,
           parts: [],
@@ -177,25 +212,30 @@ export class ConversationTaskHandler implements DurableTaskHandler {
       });
       return { status: "succeeded" };
     } catch (error) {
-      if (isPersistedCancellation(context.signal.reason)) {
-        await runs.updateStatus(payload.runId, "cancelled", undefined, {
-          code: "cancelled",
-          message: context.signal.reason.message,
-        });
-        await runs.appendEvent(payload.runId, "run.cancelled", {
-          message: context.signal.reason.message,
-        });
-        return {
-          status: "cancelled",
-          error: { code: "cancelled", message: context.signal.reason.message },
-        };
+      const persistedCancellation = isPersistedCancellation(context.signal.reason);
+      if (persistedCancellation || (await runIsCancelled(runs, payload.runId))) {
+        const reason = persistedCancellation
+          ? context.signal.reason.message
+          : "Run cancelled by the requester.";
+        const cancelled = await runs.cancel(payload.runId, reason);
+        return cancelledOutcome(cancelled.error);
       }
       const uncertain = isUnknownOutcome(error);
       const message = safeFailureMessage(error, uncertain);
-      await runs.updateStatus(payload.runId, uncertain ? "outcome_unknown" : "failed", undefined, {
-        code: uncertain ? "provider_unknown_outcome" : "provider_failed",
-        message,
-      });
+      const failed = await runs.updateStatus(
+        payload.runId,
+        uncertain ? "outcome_unknown" : "failed",
+        undefined,
+        {
+          code: uncertain ? "provider_unknown_outcome" : "provider_failed",
+          message,
+        },
+      );
+      if (!failed) {
+        const current = await getRunIfPresent(runs, payload.runId);
+        if (current?.status === "cancelled") return cancelledOutcome(current.error);
+        throw new Error("The conversation run could not be failed", { cause: error });
+      }
       await runs.appendEvent(payload.runId, uncertain ? "run.failed" : "run.failed", {
         uncertain,
         message,
@@ -302,4 +342,32 @@ function isPersistedCancellation(reason: unknown): reason is PersistedTaskCancel
     (reason as { kind?: unknown }).kind === "persisted_cancel" &&
     typeof (reason as { message?: unknown }).message === "string"
   );
+}
+
+type ConversationRun = Awaited<ReturnType<RunRepository["get"]>>;
+
+async function getRunIfPresent(
+  runs: RunRepository,
+  runId: string,
+): Promise<ConversationRun | undefined> {
+  try {
+    return await runs.get(runId);
+  } catch (error) {
+    if (error instanceof RepositoryError && error.code === "not_found") return undefined;
+    throw error;
+  }
+}
+
+async function runIsCancelled(runs: RunRepository, runId: string): Promise<boolean> {
+  return (await getRunIfPresent(runs, runId))?.status === "cancelled";
+}
+
+function cancelledOutcome(error: unknown): TaskOutcome {
+  const message =
+    error &&
+    typeof error === "object" &&
+    typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : "Run cancelled by the requester.";
+  return { status: "cancelled", error: { code: "cancelled", message } };
 }

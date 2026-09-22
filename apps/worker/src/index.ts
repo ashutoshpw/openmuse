@@ -14,12 +14,17 @@ const db = createDatabase({
   url: databaseUrl,
   maxConnections: Number(Bun.env.WORKER_DB_POOL ?? 4),
 });
+const trustedEndpoints = (Bun.env.PROVIDER_TRUSTED_ENDPOINTS ?? "")
+  .split(",")
+  .map((endpoint) => endpoint.trim())
+  .filter(Boolean);
 const pendingScopes = new PendingTaskScopeRepository(db.db);
 const providerRuntime = new WorkerProviderRuntime({
   db: db.db,
   encryptionKey: Bun.env.CREDENTIAL_ENCRYPTION_KEY,
   deterministic: Bun.env.WORKER_DETERMINISTIC_MODEL === "true",
   deterministicResponse: Bun.env.WORKER_DETERMINISTIC_RESPONSE,
+  endpointPolicy: { trustedEndpoints },
 });
 const conversationHandler = new ConversationTaskHandler({
   db: db.db,

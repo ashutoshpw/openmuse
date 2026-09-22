@@ -91,6 +91,8 @@ export const sendMessageInputSchema = z
     conversationId: idSchema,
     parts: z.array(userMessagePartSchema).min(1).max(100),
     clientMessageId: idSchema.optional(),
+    providerInstanceId: idSchema.optional(),
+    model: safeNameSchema.max(256).optional(),
   })
   .strict();
 
@@ -175,6 +177,7 @@ export const createProviderInstanceInputSchema = z
     displayName: safeNameSchema.max(128).optional(),
     config: jsonObjectSchema.default({}),
     credentialBindings: z.array(providerCredentialBindingSchema).max(20).default([]),
+    isDefault: z.boolean().default(false),
   })
   .strict();
 
@@ -184,6 +187,7 @@ export const updateProviderInstanceInputSchema = z
     config: jsonObjectSchema.optional(),
     credentialBindings: z.array(providerCredentialBindingSchema).max(20).optional(),
     enabled: z.boolean().optional(),
+    isDefault: z.boolean().optional(),
     expectedConfigDigest: digestSchema.optional(),
   })
   .strict()
@@ -200,6 +204,7 @@ export const listProviderInstancesInputSchema = paginationSchema
 export const createProviderCredentialInputSchema = z
   .object({
     providerId: idSchema,
+    providerInstanceId: idSchema,
     credentialKind: safeNameSchema.max(128),
     scope: providerCredentialScopeSchema.default("user"),
     /** Write-only input. The API encrypts this value before persistence. */
@@ -223,6 +228,7 @@ export const updateProviderCredentialInputSchema = z
 export const listProviderCredentialsInputSchema = paginationSchema
   .extend({
     providerId: idSchema.optional(),
+    providerInstanceId: idSchema.optional(),
     scope: providerCredentialScopeSchema.optional(),
     status: providerCredentialStatusSchema.optional(),
   })

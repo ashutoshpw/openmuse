@@ -79,6 +79,7 @@ describe("OpenMuse transport contracts", () => {
     expect(
       createProviderCredentialInputSchema.safeParse({
         providerId: "openai-compatible",
+        providerInstanceId: "instance-1",
         credentialKind: "api-key",
         secret: "secret-value",
       }).success,

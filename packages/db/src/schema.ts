@@ -221,6 +221,18 @@ export const runs = pgTable(
       .references(() => users.id, { onDelete: "restrict" }),
     status: text("status").notNull().default("queued"),
     provider: text("provider"),
+    providerInstanceId: text("provider_instance_id"),
+    providerId: text("provider_id"),
+    providerModule: text("provider_module"),
+    providerVersion: text("provider_version"),
+    providerBuildDigest: text("provider_build_digest"),
+    providerConfigVersion: text("provider_config_version"),
+    providerConfig: jsonb("provider_config").$type<Record<string, unknown>>(),
+    providerCredentialBindings: jsonb("provider_credential_bindings").$type<
+      Array<{ name: string; credentialId: string; revision: number }>
+    >(),
+    configDigest: text("config_digest"),
+    currentEventSequence: integer("current_event_sequence").notNull().default(0),
     idempotencyKey: text("idempotency_key"),
     leaseOwner: text("lease_owner"),
     leaseToken: text("lease_token"),
@@ -471,21 +483,49 @@ export const providerCredentials = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    providerInstanceId: text("provider_instance_id").references(() => providerInstances.id, {
+      onDelete: "cascade",
+    }),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "restrict" }),
     provider: text("provider").notNull(),
     credentialKind: text("credential_kind").notNull(),
     encryptedValue: text("encrypted_value").notNull(),
     keyVersion: integer("key_version").notNull().default(1),
+    secretRevision: integer("secret_revision").notNull().default(1),
     status: text("status").notNull().default("active"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
-    uniqueIndex("provider_credentials_scope_idx").on(
+    index("provider_credentials_instance_idx").on(
       table.workspaceId,
-      table.userId,
-      table.provider,
-      table.credentialKind,
+      table.providerInstanceId,
+      table.status,
     ),
+  ],
+);
+
+export const providerInstanceDefaults = pgTable(
+  "provider_instance_defaults",
+  {
+    id: id(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    module: text("module").notNull(),
+    providerInstanceId: text("provider_instance_id")
+      .notNull()
+      .references(() => providerInstances.id, { onDelete: "cascade" }),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index("provider_instance_defaults_scope_idx").on(table.workspaceId, table.module, table.userId),
+    index("provider_instance_defaults_instance_idx").on(table.providerInstanceId),
   ],
 );
 
@@ -501,7 +541,7 @@ export const providerInstances = pgTable(
     status: text("status").notNull().default("available"),
     config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
     credentialBindings: jsonb("credential_bindings")
-      .$type<Array<{ name: string; credentialId: string }>>()
+      .$type<Array<{ name: string; credentialId: string; revision: number }>>()
       .notNull()
       .default([]),
     version: text("version").notNull().default("1"),
@@ -643,6 +683,7 @@ export const schema = {
   connections,
   providerCredentials,
   providerInstances,
+  providerInstanceDefaults,
   auditEvents,
   idempotencyRecords,
   authSessions,
@@ -662,5 +703,6 @@ export type Task = typeof tasks.$inferSelect;
 export type Approval = typeof approvals.$inferSelect;
 export type ProviderCredential = typeof providerCredentials.$inferSelect;
 export type ProviderInstance = typeof providerInstances.$inferSelect;
+export type ProviderInstanceDefault = typeof providerInstanceDefaults.$inferSelect;
 export type AuthSession = typeof authSessions.$inferSelect;
 export type AuthAccount = typeof authAccounts.$inferSelect;

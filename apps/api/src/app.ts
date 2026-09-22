@@ -8,12 +8,20 @@ import type { DatabaseClient } from "@openmuse/db";
 import { ScopedDatabase } from "@openmuse/db";
 import { envelope, jsonError, parseJson, type ApiEnv } from "./http.js";
 import { registerCoreRoutes } from "./routes/core.js";
+import { registerProviderRoutes } from "./routes/providers.js";
+import type { ProviderCatalog } from "@openmuse/provider-server";
 
 export interface ApiOptions {
   db: DatabaseClient;
   auth: OpenMuseAuth;
   allowedOrigins: readonly string[];
   requestTimeoutMs?: number;
+  providerCatalog?: ProviderCatalog;
+  credentialEncryptionKey?: string;
+}
+
+function applicationOptions(options: ApiOptions) {
+  return options.providerCatalog ? { providerCatalog: options.providerCatalog } : {};
 }
 
 async function resolveConversationWorkspace(
@@ -101,6 +109,7 @@ export function createApi(options: ApiOptions) {
   });
 
   registerCoreRoutes(app, options);
+  registerProviderRoutes(app, options);
 
   app.get("/api/v1/sessions/current", (c) => {
     const identity = c.get("identity");
@@ -134,7 +143,7 @@ export function createApi(options: ApiOptions) {
     const identity = c.get("identity");
     const workspaceId = randomUUID();
     const scoped = new ScopedDatabase(options.db.db, { workspaceId, actorId: identity.userId });
-    const service = new OpenMuseApplication(scoped);
+    const service = new OpenMuseApplication(scoped, applicationOptions(options));
     try {
       return envelope(c, await service.createWorkspace(await parseJson(c)), c.get("requestId"));
     } catch (error) {
@@ -147,6 +156,7 @@ export function createApi(options: ApiOptions) {
     const workspaceId = c.req.param("workspaceId");
     const service = new OpenMuseApplication(
       new ScopedDatabase(options.db.db, { workspaceId, actorId: identity.userId }),
+      applicationOptions(options),
     );
     try {
       const body = await parseJson(c);
@@ -168,6 +178,7 @@ export function createApi(options: ApiOptions) {
     const workspaceId = c.req.param("workspaceId");
     const service = new OpenMuseApplication(
       new ScopedDatabase(options.db.db, { workspaceId, actorId: identity.userId }),
+      applicationOptions(options),
     );
     try {
       const items = await service.listConversations();
@@ -188,6 +199,7 @@ export function createApi(options: ApiOptions) {
       if (!workspaceId) throw new ApplicationError("Conversation not found", "not_found", 404);
       const service = new OpenMuseApplication(
         new ScopedDatabase(options.db.db, { workspaceId, actorId: identity.userId }),
+        applicationOptions(options),
       );
       return envelope(
         c,
@@ -211,6 +223,7 @@ export function createApi(options: ApiOptions) {
       if (!workspaceId) throw new ApplicationError("Conversation not found", "not_found", 404);
       const service = new OpenMuseApplication(
         new ScopedDatabase(options.db.db, { workspaceId, actorId: identity.userId }),
+        applicationOptions(options),
       );
       const body = await parseJson(c);
       if (

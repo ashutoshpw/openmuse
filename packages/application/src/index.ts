@@ -18,7 +18,9 @@ import {
 import type { ModelDriver } from "@openmuse/provider-contracts";
 import {
   ApprovalRepository,
+  ChatSubmissionRepository,
   ConversationRepository,
+  ProviderInstanceRepository,
   RepositoryError,
   RunRepository,
   ScopedDatabase,
@@ -26,6 +28,7 @@ import {
   WorkspaceRepository,
   artifacts,
 } from "@openmuse/db";
+import type { ChatProviderSnapshot, ProviderBinding } from "@openmuse/db";
 
 export class ApplicationError extends Error {
   constructor(
@@ -37,6 +40,7 @@ export class ApplicationError extends Error {
       | "not_found"
       | "conflict"
       | "provider_unavailable"
+      | "provider_auth_required"
       | "internal",
     readonly status: number,
   ) {
@@ -49,8 +53,31 @@ export interface ApplicationProviderRegistry {
   resolveModel?(providerInstanceId?: string): Promise<ModelDriver | undefined>;
 }
 
+export interface ProviderCatalogLike {
+  get(
+    module: string,
+    providerId: string,
+  ): {
+    module: string;
+    providerId: string;
+    version: string;
+    configVersion: string;
+    buildDigest: string;
+  };
+  digest(input: {
+    module: string;
+    providerId: string;
+    version: string;
+    configVersion: string;
+    buildDigest: string;
+    config: Record<string, unknown>;
+    credentialBindings: readonly ProviderBinding[];
+  }): string;
+}
+
 export interface ApplicationOptions {
   providers?: ApplicationProviderRegistry;
+  providerCatalog?: ProviderCatalogLike;
   now?: () => Date;
 }
 
@@ -99,6 +126,19 @@ function assertAllowedUserParts(input: SendMessageInput): void {
       );
     }
   }
+}
+
+function isProviderBinding(value: unknown): value is ProviderBinding {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { name?: unknown }).name === "string" &&
+    typeof (value as { credentialId?: unknown }).credentialId === "string" &&
+    typeof (value as { revision?: unknown }).revision === "number" &&
+    Number.isInteger((value as { revision: number }).revision) &&
+    (value as { revision: number }).revision > 0
+  );
 }
 
 function toWorkspace(
@@ -178,10 +218,10 @@ function toRun(row: Awaited<ReturnType<RunRepository["create"]>>): Run {
     goalId: null,
     status,
     trigger: "user",
-    providerInstanceId: row.provider,
-    configDigest: null,
+    providerInstanceId: row.providerInstanceId ?? row.provider,
+    configDigest: row.configDigest ?? null,
     memorySnapshotId: null,
-    currentEventSequence: 0,
+    currentEventSequence: row.currentEventSequence,
     usage: null,
     error: row.error && typeof row.error === "object" ? (row.error as Run["error"]) : null,
     startedAt: row.startedAt?.toISOString() ?? null,
@@ -243,8 +283,11 @@ export class OpenMuseApplication {
     if (!parsed.success)
       throw new ApplicationError("Invalid workspace input", "invalid_request", 400);
     try {
+      const update: { name?: string; archived?: boolean } = {};
+      if (parsed.data.name !== undefined) update.name = parsed.data.name;
+      if (parsed.data.archived !== undefined) update.archived = parsed.data.archived;
       return toWorkspace(
-        await this.workspaces.update(parsed.data),
+        await this.workspaces.update(update),
         (await this.workspaces.getWithMembership()).role as Workspace["role"],
       );
     } catch (error) {
@@ -285,7 +328,11 @@ export class OpenMuseApplication {
     if (!parsed.success)
       throw new ApplicationError("Invalid conversation input", "invalid_request", 400);
     try {
-      return toConversation(await this.conversations.update(id, parsed.data));
+      const update: { title?: string; visibility?: string; archived?: boolean } = {};
+      if (parsed.data.title !== undefined) update.title = parsed.data.title;
+      if (parsed.data.visibility !== undefined) update.visibility = parsed.data.visibility;
+      if (parsed.data.archived !== undefined) update.archived = parsed.data.archived;
+      return toConversation(await this.conversations.update(id, update));
     } catch (error) {
       throw mapRepositoryError(error);
     }
@@ -325,10 +372,16 @@ export class OpenMuseApplication {
     const parsed = listEventsInputSchema.safeParse(input ?? {});
     if (!parsed.success) throw new ApplicationError("Invalid event query", "invalid_request", 400);
     try {
-      const result = await this.runs.listEvents(runId, {
-        cursor: parsed.data.cursor ? Number(parsed.data.cursor) : undefined,
-        limit: parsed.data.limit,
-      });
+      const query: { cursor?: number; limit?: number } = { limit: parsed.data.limit };
+      if (parsed.data.cursor !== undefined) query.cursor = Number(parsed.data.cursor);
+      let result = await this.runs.listEvents(runId, query);
+      const deadline = Date.now() + parsed.data.waitSeconds * 1000;
+      while (result.items.length === 0 && parsed.data.waitSeconds > 0 && Date.now() < deadline) {
+        const current = await this.runs.get(runId);
+        if (["succeeded", "failed", "cancelled", "outcome_unknown"].includes(current.status)) break;
+        await waitForEventPoll(Math.min(250, Math.max(deadline - Date.now(), 0)));
+        result = await this.runs.listEvents(runId, query);
+      }
       return {
         items: result.items.map((event) => ({
           id: `${event.runId}:${event.sequence}`,
@@ -359,24 +412,86 @@ export class OpenMuseApplication {
       // query runs inside the same scoped transaction as the append in future
       // repository versions; for now it is a fail-closed preflight.
       await this.assertOwnedArtifacts(parsed.data);
-      const message = await this.conversations.appendUserMessage({
+      const provider = await this.resolveProviderSnapshot(parsed.data.providerInstanceId);
+      const submission = await new ChatSubmissionRepository(this.scoped).submit({
         conversationId: parsed.data.conversationId,
-        id: parsed.data.clientMessageId,
+        ...(parsed.data.clientMessageId ? { messageId: parsed.data.clientMessageId } : {}),
         content: parsed.data.parts,
-      });
-      const run = await this.runs.create({
-        conversationId: parsed.data.conversationId,
         idempotencyKey: parsed.data.clientMessageId ?? randomUUID(),
+        ...(provider ? { provider } : {}),
+        ...(parsed.data.model ? { model: parsed.data.model } : {}),
       });
-      await this.tasks.enqueue({
-        runId: run.id,
-        kind: "conversation.run",
-        payload: { runId: run.id, conversationId: run.conversationId, messageId: message.id },
-      });
-      return { message: toMessage(message), run: toRun(run) };
+      return { message: toMessage(submission.message), run: toRun(submission.run) };
     } catch (error) {
       throw mapRepositoryError(error);
     }
+  }
+
+  private async resolveProviderSnapshot(
+    providerInstanceId?: string,
+  ): Promise<ChatProviderSnapshot | undefined> {
+    if (!this.options.providerCatalog) {
+      if (providerInstanceId)
+        throw new ApplicationError(
+          "Provider configuration is unavailable",
+          "provider_unavailable",
+          409,
+        );
+      return undefined;
+    }
+    const instances = new ProviderInstanceRepository(this.scoped);
+    const row = providerInstanceId
+      ? await instances.get(providerInstanceId)
+      : await instances.resolveDefault("model");
+    if (!row) {
+      if (providerInstanceId)
+        throw new ApplicationError("Provider instance not found", "not_found", 404);
+      throw new ApplicationError(
+        "No default model provider is configured",
+        "provider_unavailable",
+        409,
+      );
+    }
+    if (row.module !== "model" || row.status !== "available")
+      throw new ApplicationError(
+        "The selected model provider is unavailable",
+        "provider_unavailable",
+        409,
+      );
+    const catalog = this.options.providerCatalog.get(row.module, row.providerId);
+    const bindings = row.credentialBindings.filter(isProviderBinding);
+    if (bindings.length !== row.credentialBindings.length)
+      throw new ApplicationError(
+        "Provider credential bindings are incomplete",
+        "provider_auth_required",
+        409,
+      );
+    const configDigest = this.options.providerCatalog.digest({
+      module: row.module,
+      providerId: row.providerId,
+      version: row.version,
+      configVersion: row.configVersion,
+      buildDigest: catalog.buildDigest,
+      config: row.config,
+      credentialBindings: bindings,
+    });
+    if (configDigest !== row.configDigest)
+      throw new ApplicationError(
+        "Provider configuration is stale and must be re-saved",
+        "conflict",
+        409,
+      );
+    return {
+      providerInstanceId: row.id,
+      providerId: row.providerId,
+      module: row.module,
+      version: row.version,
+      buildDigest: catalog.buildDigest,
+      configVersion: row.configVersion,
+      config: row.config,
+      credentialBindings: bindings,
+      configDigest,
+    };
   }
 
   private async assertOwnedArtifacts(input: SendMessageInput): Promise<void> {
@@ -407,6 +522,11 @@ export class OpenMuseApplication {
       }
     });
   }
+}
+
+function waitForEventPoll(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function slugify(name: string): string {

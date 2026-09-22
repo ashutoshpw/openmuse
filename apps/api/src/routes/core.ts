@@ -8,14 +8,22 @@ import {
   resolveResourceWorkspace,
 } from "@openmuse/db";
 import { envelope, jsonError, parseJson, type ApiContext, type ApiEnv } from "../http.js";
+import type { ProviderCatalog } from "@openmuse/provider-server";
 
 interface CoreRouteOptions {
   db: DatabaseClient;
+  providerCatalog?: ProviderCatalog;
 }
 
-function service(c: ApiContext, db: DatabaseClient, workspaceId: string): OpenMuseApplication {
+function service(
+  c: ApiContext,
+  db: DatabaseClient,
+  workspaceId: string,
+  providerCatalog?: ProviderCatalog,
+): OpenMuseApplication {
   return new OpenMuseApplication(
     new ScopedDatabase(db.db, { workspaceId, actorId: c.get("identity").userId }),
+    providerCatalog ? { providerCatalog } : {},
   );
 }
 
@@ -72,9 +80,12 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
     try {
       return envelope(
         c,
-        await service(c, options.db, c.req.param("workspaceId")).updateWorkspace(
-          await parseJson(c),
-        ),
+        await service(
+          c,
+          options.db,
+          c.req.param("workspaceId"),
+          options.providerCatalog,
+        ).updateWorkspace(await parseJson(c)),
         request(c),
       );
     } catch (error) {
@@ -93,7 +104,7 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
         throw new ApplicationError("workspaceId is required", "invalid_request", 400);
       return envelope(
         c,
-        await service(c, options.db, workspaceId).createConversation(body),
+        await service(c, options.db, workspaceId, options.providerCatalog).createConversation(body),
         request(c),
       );
     } catch (error) {
@@ -113,7 +124,7 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
       if (!workspaceId) throw new ApplicationError("Conversation not found", "not_found", 404);
       return envelope(
         c,
-        await service(c, options.db, workspaceId).updateConversation(
+        await service(c, options.db, workspaceId, options.providerCatalog).updateConversation(
           conversationId,
           await parseJson(c),
         ),
@@ -135,7 +146,9 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
       );
       if (!workspaceId) throw new ApplicationError("Conversation not found", "not_found", 404);
       const query = pageQuery(c);
-      const items = await service(c, options.db, workspaceId).listMessages(conversationId);
+      const items = await service(c, options.db, workspaceId, options.providerCatalog).listMessages(
+        conversationId,
+      );
       const start = query.cursor ? Math.max(Number(query.cursor) - 1, 0) : 0;
       const selected = items.slice(start, start + query.limit + 1);
       return envelope(
@@ -164,7 +177,11 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
         c.get("identity").userId,
       );
       if (!workspaceId) throw new ApplicationError("Run not found", "not_found", 404);
-      return envelope(c, await service(c, options.db, workspaceId).getRun(runId), request(c));
+      return envelope(
+        c,
+        await service(c, options.db, workspaceId, options.providerCatalog).getRun(runId),
+        request(c),
+      );
     } catch (error) {
       return jsonError(c, error, request(c));
     }
@@ -182,7 +199,10 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
       if (!workspaceId) throw new ApplicationError("Run not found", "not_found", 404);
       return envelope(
         c,
-        await service(c, options.db, workspaceId).cancelRun(runId, await parseJson(c)),
+        await service(c, options.db, workspaceId, options.providerCatalog).cancelRun(
+          runId,
+          await parseJson(c),
+        ),
         request(c),
       );
     } catch (error) {
@@ -203,7 +223,7 @@ export function registerCoreRoutes(app: Hono<ApiEnv>, options: CoreRouteOptions)
       const query = pageQuery(c);
       return envelope(
         c,
-        await service(c, options.db, workspaceId).listRunEvents(runId, {
+        await service(c, options.db, workspaceId, options.providerCatalog).listRunEvents(runId, {
           cursor: c.req.query("cursor"),
           limit: query.limit,
           waitSeconds: Number(c.req.query("waitSeconds") ?? 0),
