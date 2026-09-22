@@ -5,8 +5,15 @@ import type {
   ProviderRegistration,
 } from "./types.js";
 
-export interface RealtimeConfig { endpoint?: string; defaultModel?: string }
-export interface RealtimeConnectRequest { model?: string; instructions?: string; modalities?: ("text" | "audio")[] }
+export interface RealtimeConfig {
+  endpoint?: string;
+  defaultModel?: string;
+}
+export interface RealtimeConnectRequest {
+  model?: string;
+  instructions?: string;
+  modalities?: ("text" | "audio")[];
+}
 export type RealtimeEvent =
   | { type: "connected"; sessionId: string }
   | { type: "text_delta"; text: string }
@@ -17,11 +24,18 @@ export type RealtimeEvent =
 export interface RealtimeSession extends AsyncDisposable {
   readonly events: AsyncIterable<RealtimeEvent>;
   sendText(text: string, context: ProviderOperationContext): Promise<void>;
-  sendAudio(bytes: Uint8Array, contentType: string, context: ProviderOperationContext): Promise<void>;
+  sendAudio(
+    bytes: Uint8Array,
+    contentType: string,
+    context: ProviderOperationContext,
+  ): Promise<void>;
   interrupt(context: ProviderOperationContext): Promise<void>;
 }
 export interface RealtimeClient extends AsyncDisposable {
-  connect(request: RealtimeConnectRequest, context: ProviderOperationContext): Promise<RealtimeSession>;
+  connect(
+    request: RealtimeConnectRequest,
+    context: ProviderOperationContext,
+  ): Promise<RealtimeSession>;
 }
 export interface RealtimeDriver extends ProviderRegistration<RealtimeConfig, RealtimeClient> {
   readonly module: "realtime";
