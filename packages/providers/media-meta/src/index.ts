@@ -184,6 +184,16 @@ function redactText(value: string, secrets: ReadonlySet<string>): string {
   return redacted.length > 2048 ? `${redacted.slice(0, 2048)}…` : redacted;
 }
 
+function redactValue(value: unknown, secrets: ReadonlySet<string>): unknown {
+  if (typeof value === "string") return redactText(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, secrets));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, redactValue(child, secrets)]),
+    );
+  return value;
+}
+
 /**
  * The shared HTTP boundary keeps provider details out of safeMessage, but the
  * internal message can still echo a credential if a provider does so. Clone
@@ -200,19 +210,26 @@ function redactError(
     return new ProviderOperationError({
       code: error.code,
       message: redactText(error.message, secrets),
-      safeMessage: error.safeMessage,
+      safeMessage: redactText(error.safeMessage, secrets),
       retryable: error.retryable,
       uncertain: error.uncertain,
       providerId: error.providerId ?? providerId,
       module: error.module ?? module,
       operation: error.operation ?? operation,
-      ...(error.providerCode === undefined ? {} : { providerCode: error.providerCode }),
+      ...(error.providerCode === undefined
+        ? {}
+        : { providerCode: redactText(error.providerCode, secrets) }),
       ...(error.retryAfterSeconds === undefined
         ? {}
         : { retryAfterSeconds: error.retryAfterSeconds }),
       ...(error.details === undefined
         ? {}
-        : { details: redactProviderDetails(error.details) as Record<string, never> }),
+        : {
+            details: redactProviderDetails(redactValue(error.details, secrets)) as Record<
+              string,
+              never
+            >,
+          }),
     });
   }
   const message =
