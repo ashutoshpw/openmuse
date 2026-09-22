@@ -269,15 +269,16 @@ function WorkspaceLayout({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { signOut } = useOpenMuse();
-  const { session, workspace } = useWorkspace();
+  const { workspace } = useWorkspace();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [signOutError, setSignOutError] = useState("");
   const activeHref =
     navigationItems.find(
       (item) => location.pathname === item.href || location.pathname.startsWith(`${item.href}/`),
     )?.href ?? "/";
   const sidebarItems = navigationItems as SidebarItem[];
-  const userLabel = session.userId ? `Member ${session.userId.slice(0, 8)}` : "OpenMuse member";
+  const userLabel = "Your account";
 
   return (
     <div className="om-app-shell">
@@ -295,9 +296,23 @@ function WorkspaceLayout({ children }: { children?: ReactNode }) {
         workspaceRole={workspace?.role ?? "member"}
       />
       {workspaceMenuOpen ? <WorkspaceMenu onClose={() => setWorkspaceMenuOpen(false)} /> : null}
-      <button className="om-shell-signout" onClick={() => void signOut()} type="button">
+      <button
+        className="om-shell-signout"
+        onClick={() => {
+          setSignOutError("");
+          void signOut().catch((cause: unknown) => {
+            setSignOutError(errorMessage(cause, "The session could not be closed."));
+          });
+        }}
+        type="button"
+      >
         <Icon name="close" size={13} /> Sign out
       </button>
+      {signOutError ? (
+        <div className="om-shell-signout-error" role="alert">
+          {signOutError}
+        </div>
+      ) : null}
       <main className="om-main">
         <header className="om-mobile-header">
           <IconButton label="Open navigation" onClick={() => setMobileOpen(true)}>
@@ -338,7 +353,10 @@ function AuthenticatedApp() {
 }
 
 export function RootLayout() {
+  const { isSignedOut, retrySession } = useOpenMuse();
   const sessionQuery = useSessionQuery();
+  if (isSignedOut)
+    return <LoginScreen error={null} onRetry={retrySession} />;
   if (sessionQuery.isPending) return <LoadingScreen />;
   if (!sessionQuery.data)
     return <LoginScreen error={sessionQuery.error} onRetry={() => void sessionQuery.refetch()} />;

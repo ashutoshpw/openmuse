@@ -6,14 +6,17 @@ import type { Session, Workspace } from "@openmuse/contracts";
 type AppContextValue = {
   api: OpenMuseClient;
   baseUrl: string;
+  isSignedOut: boolean;
   signIn: (input: { email: string; password: string }) => Promise<void>;
   signOut: () => Promise<void>;
+  retrySession: () => void;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
+  const [isSignedOut, setIsSignedOut] = useState(false);
   const baseUrl =
     (import.meta.env.VITE_OPENMUSE_API_URL as string | undefined)?.replace(/\/$/, "") ||
     window.location.origin;
@@ -33,7 +36,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           payload?.message ?? payload?.error?.message ?? "The sign-in details were not accepted.",
         );
       }
-      await queryClient.invalidateQueries({ queryKey: ["session"] });
+      // A successful sign-in may belong to a different account. Drop every
+      // private query before asking the session query to repopulate it.
+      queryClient.clear();
+      setIsSignedOut(false);
     },
     [baseUrl, queryClient],
   );
@@ -44,23 +50,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
     if (!response.ok && response.status !== 401)
       throw new Error("The session could not be closed.");
-    queryClient.removeQueries({ queryKey: ["session"] });
     queryClient.clear();
+    setIsSignedOut(true);
   }, [baseUrl, queryClient]);
+  const retrySession = useCallback(() => {
+    queryClient.clear();
+    setIsSignedOut(false);
+  }, [queryClient]);
   const api = useMemo(
     () =>
       createApiClient({
         baseUrl,
         fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
         onUnauthorized: () => {
-          void queryClient.invalidateQueries({ queryKey: ["session"] });
+          // Do not invalidate `session` from its own 401 handler: that can
+          // create an unbounded refetch loop. Clearing the cache also prevents
+          // an expired account's private data from remaining visible.
+          queryClient.clear();
+          setIsSignedOut(true);
         },
       }),
     [baseUrl, queryClient],
   );
 
   return (
-    <AppContext.Provider value={{ api, baseUrl, signIn, signOut }}>{children}</AppContext.Provider>
+    <AppContext.Provider
+      value={{ api, baseUrl, isSignedOut, retrySession, signIn, signOut }}
+    >
+      {children}
+    </AppContext.Provider>
   );
 }
 
@@ -71,8 +89,9 @@ export function useOpenMuse() {
 }
 
 export function useSessionQuery() {
-  const { api } = useOpenMuse();
+  const { api, isSignedOut } = useOpenMuse();
   return useQuery({
+    enabled: !isSignedOut,
     queryKey: ["session"],
     queryFn: () => api.getCurrentSession(),
     retry: false,

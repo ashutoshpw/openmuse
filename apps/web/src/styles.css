@@ -70,6 +70,19 @@ a {
 .om-shell-signout:hover {
   color: var(--om-coral-deep);
 }
+.om-shell-signout-error {
+  background: var(--om-coral-wash);
+  border: 1px solid var(--om-coral);
+  border-radius: 9px;
+  color: var(--om-coral-deep);
+  font-size: 11px;
+  max-width: 260px;
+  padding: 8px 10px;
+  position: fixed;
+  right: 28px;
+  top: 58px;
+  z-index: 5;
+}
 .om-main {
   min-width: 0;
   width: calc(100% - 258px);
