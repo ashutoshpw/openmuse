@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "OpenMuse pre-commit requires Bun 1.4.2 or newer." >&2
+  exit 1
+fi
+
+exec bun run lint-staged

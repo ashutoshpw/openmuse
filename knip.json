@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    "apps/mobile/.expo/**",
+    "apps/api/test/support/postgres.ts",
+    "apps/web/test-results/**",
+    "**/dist/**",
+    "**/build/**"
+  ],
+  "ignoreDependencies": [
+    "@expo/ui",
+    "@openmuse/contracts",
+    "@openmuse/core",
+    "expo-file-system",
+    "expo-image",
+    "expo-sharing",
+    "expo-system-ui",
+    "expo-updates",
+    "license-checker",
+    "lint-staged",
+    "zod"
+  ]
+}

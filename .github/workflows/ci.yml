@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openmuse-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.4.2
+
+jobs:
+  quality:
+    name: TypeScript and repository quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Set up Node for Node-owned tooling
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.14.0
+      - name: Install frozen dependencies
+        run: bun install --frozen-lockfile
+      - name: Lint workflow syntax
+        uses: docker://rhysd/actionlint@sha256:1d74bfc9fd1963af8f89a7c22afaaafd42f49aad711a09951d02cb996398f61d
+      - name: Run repository quality gates
+        run: bun run check:quality
+      - name: Check formatting
+        run: bun run format:check
+      - name: Lint all workspaces
+        run: bun run lint
+      - name: Typecheck all workspaces
+        run: bun run typecheck
+      - name: Run unit tests
+        run: bun run test:unit
+      - name: Build all workspaces
+        run: bun run build
+
+  native:
+    name: Native Jest and Expo bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install frozen dependencies
+        run: bun install --frozen-lockfile
+      - name: Run native Jest suite
+        run: bun run test:native
+      - name: Export Expo iOS Hermes bundle
+        run: bun run build:native
+
+  postgres:
+    name: PostgreSQL migration and RLS integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openmuse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d openmuse"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_URL: postgres://openmuse_runtime:openmuse_runtime_ci@127.0.0.1:5432/openmuse
+      MIGRATION_DATABASE_URL: postgres://openmuse_migrator:openmuse_migrator_ci@127.0.0.1:5432/openmuse
+      WORKER_DATABASE_URL: postgres://openmuse_worker:openmuse_worker_ci@127.0.0.1:5432/openmuse
+      AUTH_DATABASE_URL: postgres://openmuse_auth:openmuse_auth_ci@127.0.0.1:5432/openmuse
+      RUNTIME_DB_ROLE: openmuse_runtime
+      WORKER_DB_ROLE: openmuse_worker
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install PostgreSQL client
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-client
+          fi
+      - name: Install frozen dependencies
+        run: bun install --frozen-lockfile
+      - name: Create least-privilege CI roles
+        env:
+          ADMIN_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openmuse
+        run: |
+          psql "$ADMIN_DATABASE_URL" --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmuse_migrator') THEN
+              CREATE ROLE openmuse_migrator LOGIN PASSWORD 'openmuse_migrator_ci';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmuse_runtime') THEN
+              CREATE ROLE openmuse_runtime LOGIN PASSWORD 'openmuse_runtime_ci';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmuse_worker') THEN
+              CREATE ROLE openmuse_worker LOGIN PASSWORD 'openmuse_worker_ci';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmuse_auth') THEN
+              CREATE ROLE openmuse_auth LOGIN PASSWORD 'openmuse_auth_ci';
+            END IF;
+          END
+          $$;
+          GRANT CONNECT ON DATABASE openmuse TO openmuse_migrator, openmuse_runtime, openmuse_worker, openmuse_auth;
+          GRANT USAGE, CREATE ON SCHEMA public TO openmuse_migrator;
+          SQL
+      - name: Apply migrations as the migration role
+        run: bun run db:migrate
+      - name: Grant runtime and worker privileges
+        run: bun scripts/grant-runtime.ts
+      - name: Grant Better Auth role privileges
+        env:
+          ADMIN_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openmuse
+        run: |
+          psql "$ADMIN_DATABASE_URL" --set ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA public TO openmuse_auth;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON users, session, account, verification TO openmuse_auth;
+          GRANT EXECUTE ON FUNCTION openmuse_accept_invite(text, text, text) TO openmuse_auth;
+          SQL
+      - name: Run PostgreSQL RLS smoke test
+        run: bun run test:pg
+
+  web:
+    name: Web Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install frozen dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Run deterministic browser tests
+        run: bun run test:web
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openmuse-web-screenshots
+          path: /tmp/openmuse-web-*.png
+          if-no-files-found: ignore
+
+  aggregate:
+    name: CI aggregate
+    if: always()
+    needs: [quality, native, postgres, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every gate to pass
+        run: |
+          echo "quality=${{ needs.quality.result }}"
+          echo "native=${{ needs.native.result }}"
+          echo "postgres=${{ needs.postgres.result }}"
+          echo "web=${{ needs.web.result }}"
+          test "${{ needs.quality.result }}" = success
+          test "${{ needs.native.result }}" = success
+          test "${{ needs.postgres.result }}" = success
+          test "${{ needs.web.result }}" = success

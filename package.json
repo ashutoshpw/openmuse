@@ -2,30 +2,58 @@
   "name": "openmuse",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "packageManager": "bun@1.4.2",
   "workspaces": [
     "apps/*",
     "packages/*",
     "packages/providers/*"
   ],
+  "type": "module",
   "scripts": {
+    "check:boundaries": "bun scripts/check-boundaries.ts",
+    "check:licenses": "bun scripts/check-licenses.ts",
+    "check:secrets": "bun scripts/check-secrets.ts",
+    "check:test-selection": "bun scripts/check-test-selection.ts",
+    "check:workflows": "bun scripts/check-workflows.ts",
+    "check:knip": "knip --no-progress --include dependencies,unlisted",
+    "check:quality": "bun run check:workflows && bun run check:secrets && bun run check:licenses && bun run check:boundaries && bun run check:test-selection && bun run check:knip",
+    "db:migrate": "bun scripts/migrate.ts",
+    "db:smoke": "bun scripts/pg-smoke.ts",
+    "auth:bootstrap": "bun scripts/bootstrap.ts",
+    "hooks:install": "git config core.hooksPath .githooks",
     "lint": "oxlint . && turbo run lint",
     "format:check": "oxfmt --check .",
     "typecheck": "turbo run typecheck",
-    "test": "vitest run --config vitest.config.ts",
+    "test": "bun run test:unit",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:native": "bash scripts/test-native.sh",
+    "test:pg": "bun run db:smoke",
+    "test:web": "bash scripts/test-web.sh",
+    "build:native": "bash scripts/export-native.sh",
     "build": "turbo run build",
-    "check": "bun run lint && bun run format:check && bun run typecheck && bun run test && bun run build"
+    "check": "bun run check:quality && bun run lint && bun run format:check && bun run typecheck && bun run test && bun run test:native && bun run build:native && bun run build"
   },
   "devDependencies": {
     "@types/bun": "catalog:testing",
     "@types/node": "catalog:testing",
+    "knip": "6.37.0",
+    "license-checker": "25.0.1",
+    "lint-staged": "17.5.1",
     "oxfmt": "catalog:tooling",
     "oxlint": "catalog:tooling",
     "turbo": "catalog:tooling",
     "typescript": "catalog:tooling",
     "vitest": "catalog:testing"
   },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "oxlint --fix",
+      "oxfmt --check"
+    ],
+    "*.{json,md,yml,yaml,css,sql}": [
+      "oxfmt --check"
+    ]
+  },
+  "packageManager": "bun@1.4.2",
   "catalog": {
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
