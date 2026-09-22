@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, exists, max, or, sql } from "drizzle-orm";
 import type { DbTransaction, ScopedDatabase } from "./context.js";
-import { RepositoryError } from "./repositories.js";
-import { conversationMembers, conversations, messages, runEvents, runs, tasks } from "./schema.js";
+import { hashPayload, RepositoryError } from "./repositories.js";
+import {
+  conversationMembers,
+  conversations,
+  idempotencyRecords,
+  messages,
+  runEvents,
+  runs,
+  tasks,
+} from "./schema.js";
 import type { ProviderBinding } from "./provider-repositories.js";
 
 export interface ChatProviderSnapshot {
@@ -33,9 +41,52 @@ export class ChatSubmissionRepository {
     model?: string;
   }) {
     return this.scoped.run(async (tx) => {
+      const requestHash = hashPayload({
+        conversationId: input.conversationId,
+        content: input.content,
+        model: input.model ?? null,
+        provider: input.provider ?? null,
+      });
       if (input.messageId) {
-        const existing = await this.findExisting(tx, input.messageId, input.conversationId);
-        if (existing) return existing;
+        const [claimed] = await tx
+          .insert(idempotencyRecords)
+          .values({
+            key: input.messageId,
+            workspaceId: this.scope.workspaceId,
+            actorId: this.scope.actorId,
+            requestHash,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          })
+          .onConflictDoNothing({
+            target: [
+              idempotencyRecords.workspaceId,
+              idempotencyRecords.actorId,
+              idempotencyRecords.key,
+            ],
+          })
+          .returning({ key: idempotencyRecords.key });
+        if (!claimed) {
+          const [record] = await tx
+            .select({ requestHash: idempotencyRecords.requestHash })
+            .from(idempotencyRecords)
+            .where(
+              and(
+                eq(idempotencyRecords.workspaceId, this.scope.workspaceId),
+                eq(idempotencyRecords.actorId, this.scope.actorId),
+                eq(idempotencyRecords.key, input.messageId),
+              ),
+            )
+            .for("update")
+            .limit(1);
+          if (!record || record.requestHash !== requestHash)
+            throw new RepositoryError(
+              "Idempotency key was reused with different content",
+              "conflict",
+            );
+          const existing = await this.findExisting(tx, input.messageId, input.conversationId);
+          if (existing) return existing;
+          throw new RepositoryError("Message submission is incomplete", "conflict");
+        }
       }
       const [conversation] = await tx
         .select()
