@@ -1,0 +1,21 @@
+{
+  "name": "@openmuse/provider-sandbox-e2b",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openmuse/provider-contracts": "workspace:*",
+    "e2b": "2.48.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "vitest": "catalog:testing"
+  }
+}
