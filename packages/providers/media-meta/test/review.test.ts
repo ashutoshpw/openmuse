@@ -253,4 +253,38 @@ describe("Meta independent media regressions", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).not.toContain(secret);
   });
+
+  it("redacts the resolved API key from a normalized transport cause", async () => {
+    const driver = createMetaImageDriver({
+      fetch: async () => {
+        throw new Error(`transport leaked ${secret}`);
+      },
+    });
+    const client = await driver.create(imageConfig(driver), createContext());
+
+    const error = await client.generate({ prompt: "image" }, operation()).catch((value) => value);
+    expect(error).toMatchObject({ code: "unknown_outcome" });
+    expect((error as Error).message).not.toContain(secret);
+    expect((error as { details?: { cause?: string } }).details?.cause).not.toContain(secret);
+    expect(JSON.stringify(error)).not.toContain(secret);
+  });
+
+  it("redacts the resolved API key from an upstream provider code", async () => {
+    const driver = createMetaImageDriver({
+      fetch: async () =>
+        new Response(JSON.stringify({ code: secret, message: "upstream failure" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const client = await driver.create(imageConfig(driver), createContext());
+
+    const error = await client.generate({ prompt: "image" }, operation()).catch((value) => value);
+    expect(error).toMatchObject({ code: "unavailable" });
+    expect((error as { providerCode?: string }).providerCode).not.toContain(secret);
+    expect((error as { details?: { providerCode?: string } }).details?.providerCode).not.toContain(
+      secret,
+    );
+    expect(JSON.stringify(error)).not.toContain(secret);
+  });
 });
