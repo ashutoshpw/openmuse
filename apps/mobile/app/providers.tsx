@@ -78,8 +78,18 @@ function ProviderCard({
 }
 
 function ProvidersContent() {
-  const apiPromise = useAuthenticatedApi();
   const { session } = useSession();
+  const { workspace } = useWorkspace();
+
+  return (
+    <ProvidersWorkspaceContent
+      key={`${session?.user.id ?? "signed-out"}:${workspace?.id ?? "no-workspace"}`}
+    />
+  );
+}
+
+function ProvidersWorkspaceContent() {
+  const apiPromise = useAuthenticatedApi();
   const { workspace } = useWorkspace();
   const [catalog, setCatalog] = useState<ProviderInstance[]>([]);
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
@@ -119,13 +129,6 @@ function ProvidersContent() {
   useEffect(() => {
     void Promise.resolve().then(() => refresh());
   }, [refresh]);
-
-  useEffect(() => {
-    clearSecret();
-    setProvider("");
-    setSelectedProvider(null);
-    setShowByok(false);
-  }, [clearSecret, session?.user.id, workspace?.id]);
 
   const connectApp = async (app: "gmail" | "calendar") => {
     if (!apiPromise || !workspace) return;
