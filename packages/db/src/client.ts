@@ -36,7 +36,7 @@ export function createDatabase(options: DatabaseOptions): DatabaseClient {
     max: options.maxConnections ?? 10,
     idle_timeout: options.idleTimeoutSeconds ?? 20,
     connect_timeout: options.connectTimeoutSeconds ?? 10,
-    ssl: options.ssl,
+    ...(options.ssl === undefined ? {} : { ssl: options.ssl }),
     // RLS context is set with transaction-local set_config. Prepared
     // statements are safe, but disabling them keeps PgBouncer transaction
     // pooling compatible for self-hosted deployments.
@@ -55,7 +55,7 @@ export function createDatabase(options: DatabaseOptions): DatabaseClient {
         max: 1,
         idle_timeout: 5,
         connect_timeout: options.connectTimeoutSeconds ?? 10,
-        ssl: options.ssl,
+        ...(options.ssl === undefined ? {} : { ssl: options.ssl }),
         prepare: false,
       });
       try {

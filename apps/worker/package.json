@@ -14,15 +14,8 @@
     "@openmuse/contracts": "workspace:*",
     "@openmuse/core": "workspace:*",
     "@openmuse/db": "workspace:*",
-    "@openmuse/provider-connector-appconnect": "workspace:*",
     "@openmuse/provider-contracts": "workspace:*",
-    "@openmuse/provider-model-meta": "workspace:*",
-    "@openmuse/provider-model-ollama": "workspace:*",
-    "@openmuse/provider-model-openai-compatible": "workspace:*",
-    "@openmuse/provider-search-exa": "workspace:*",
-    "@openmuse/provider-search-tavily": "workspace:*",
-    "@openmuse/provider-server": "workspace:*",
-    "drizzle-orm": "catalog:"
+    "@openmuse/provider-server": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:testing",

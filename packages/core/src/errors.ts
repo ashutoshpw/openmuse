@@ -11,21 +11,29 @@ export class CoreError extends Error {
     this.name = "CoreError";
     this.code = code;
     this.safeMessage = safeMessage;
-    this.details = details;
+    if (details !== undefined) this.details = details;
   }
 }
 
 const secretKey = /(token|secret|password|authorization|cookie|api[-_]?key|private[-_]?key)/i;
 
 export function redact(value: unknown): JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     if (typeof value === "string" && value.length > 2048) return `${value.slice(0, 2048)}…`;
     return value;
   }
   if (Array.isArray(value)) return value.map(redact);
   if (typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, secretKey.test(key) ? "[REDACTED]" : redact(child)]),
+      Object.entries(value).map(([key, child]) => [
+        key,
+        secretKey.test(key) ? "[REDACTED]" : redact(child),
+      ]),
     );
   }
   return "[UNSERIALIZABLE]";
