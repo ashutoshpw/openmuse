@@ -2,7 +2,6 @@ import type {
   AsyncDisposable,
   ProviderBlob,
   ProviderConfigDefinition,
-  ProviderCreateContext,
   ProviderOperationContext,
   ProviderReference,
   ProviderRegistration,

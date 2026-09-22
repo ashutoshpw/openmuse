@@ -12,6 +12,9 @@ import {
   nonEmptyTextSchema,
   pageInfoSchema,
   providerModuleSchema,
+  providerCredentialScopeSchema,
+  providerCredentialStatusSchema,
+  providerInstanceScopeSchema,
   providerStatusSchema,
   roleSchema,
   runStatusSchema,
@@ -67,15 +70,27 @@ const messageAuthorSchema = z.discriminatedUnion("type", [
 
 export const messagePartSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string().max(100_000) }),
-  z.object({ type: z.literal("reasoning"), text: z.string().max(100_000), redacted: z.boolean().default(true) }),
+  z.object({
+    type: z.literal("reasoning"),
+    text: z.string().max(100_000),
+    redacted: z.boolean().default(true),
+  }),
   z.object({
     type: z.literal("image"),
     artifactId: idSchema,
     alt: z.string().max(500).optional(),
   }),
   z.object({ type: z.literal("file"), artifactId: idSchema, name: safeNameSchema.optional() }),
-  z.object({ type: z.literal("audio"), artifactId: idSchema, durationMs: z.number().int().nonnegative().optional() }),
-  z.object({ type: z.literal("artifactRef"), artifactId: idSchema, purpose: z.string().trim().max(128).optional() }),
+  z.object({
+    type: z.literal("audio"),
+    artifactId: idSchema,
+    durationMs: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    type: z.literal("artifactRef"),
+    artifactId: idSchema,
+    purpose: z.string().trim().max(128).optional(),
+  }),
   z.object({
     type: z.literal("citation"),
     url: z.string().url(),
@@ -181,6 +196,8 @@ export const providerSecretReferenceSchema = z.object({
 
 export const providerInstanceSchema = baseResourceSchema.extend({
   workspaceId: idSchema.nullable(),
+  scope: providerInstanceScopeSchema,
+  ownerUserId: idSchema.nullable(),
   providerId: idSchema,
   module: providerModuleSchema,
   displayName: safeNameSchema.max(128),
@@ -191,6 +208,17 @@ export const providerInstanceSchema = baseResourceSchema.extend({
   capabilities: z.array(providerCapabilitySchema).max(100),
   requiredSecrets: z.array(providerSecretReferenceSchema).max(100),
   metadata: jsonObjectSchema,
+});
+
+/** Credential metadata is safe to return; the encrypted or plaintext value is never exposed. */
+export const providerCredentialSchema = baseResourceSchema.extend({
+  workspaceId: idSchema,
+  scope: providerCredentialScopeSchema,
+  ownerUserId: idSchema.nullable(),
+  providerId: idSchema,
+  credentialKind: safeNameSchema.max(128),
+  keyVersion: z.number().int().positive(),
+  status: providerCredentialStatusSchema,
 });
 
 export const scheduleSchema = z.discriminatedUnion("kind", [
@@ -297,6 +325,7 @@ export type RunEvent = z.infer<typeof runEventSchema>;
 export type Approval = z.infer<typeof approvalSchema>;
 export type ProviderCapability = z.infer<typeof providerCapabilitySchema>;
 export type ProviderInstance = z.infer<typeof providerInstanceSchema>;
+export type ProviderCredential = z.infer<typeof providerCredentialSchema>;
 export type Schedule = z.infer<typeof scheduleSchema>;
 export type Goal = z.infer<typeof goalSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;

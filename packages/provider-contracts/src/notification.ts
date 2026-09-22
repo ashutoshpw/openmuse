@@ -1,7 +1,6 @@
 import type {
   AsyncDisposable,
   ProviderConfigDefinition,
-  ProviderCreateContext,
   ProviderOperationContext,
   ProviderRegistration,
 } from "./types.js";

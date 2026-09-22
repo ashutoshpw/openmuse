@@ -5,7 +5,6 @@ import type {
   ProviderCreateContext,
   ProviderRegistration,
   ProviderOperationContext,
-  ProviderReference,
 } from "./types.js";
 
 export interface ModelConfig {

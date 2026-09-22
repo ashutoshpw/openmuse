@@ -1,0 +1,21 @@
+{
+  "name": "@openmuse/provider-search-tavily",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openmuse/provider-contracts": "workspace:*",
+    "@openmuse/provider-http": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "vitest": "catalog:testing"
+  }
+}

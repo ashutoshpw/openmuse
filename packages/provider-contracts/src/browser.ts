@@ -7,7 +7,14 @@ import type {
   ProviderRegistration,
 } from "./types.js";
 
-export interface BrowserConfig { endpoint?: string; maxPages?: number }
+export interface BrowserConfig {
+  endpoint?: string;
+  authTokenSecret?: string;
+  maxPages?: number;
+  requestTimeoutMs?: number;
+  maxResponseBytes?: number;
+  allowedHosts?: string[];
+}
 export interface BrowserPage { id: string; url: string; title?: string; text?: string; screenshot?: ProviderReference }
 export interface BrowserClient extends AsyncDisposable {
   open(url: string, context: ProviderOperationContext): Promise<BrowserPage>;
@@ -18,4 +25,5 @@ export interface BrowserClient extends AsyncDisposable {
 export interface BrowserDriver extends ProviderRegistration<BrowserConfig, BrowserClient> {
   readonly module: "browser";
   readonly config: ProviderConfigDefinition<BrowserConfig>;
+  create(config: BrowserConfig, context: ProviderCreateContext): Promise<BrowserClient>;
 }

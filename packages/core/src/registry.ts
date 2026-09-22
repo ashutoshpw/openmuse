@@ -25,7 +25,7 @@ export interface ProviderScopeContext extends Omit<ProviderCreateContext, "scope
 
 export interface ProviderScope {
   readonly id: string;
-  resolve<Config, Instance>(
+  resolve<Instance>(
     providerInstanceId: string,
     module: ProviderModule,
     providerId: string,
@@ -46,7 +46,7 @@ function stableConfig(value: unknown): string {
 }
 
 function parseConfig<Config>(definition: ProviderConfigDefinition<Config>, input: unknown): Config {
-  const withDefaults = definition.defaults ? { ...definition.defaults(), ...(input ?? {}) } : input;
+  const withDefaults = definition.defaults ? Object.assign(definition.defaults(), input) : input;
   const parsed = definition.schema.safeParse(withDefaults);
   if (!parsed.success) {
     throw new CoreError("invalid_provider_config", "The provider configuration is invalid.", {
@@ -136,7 +136,7 @@ export class ProviderRegistry {
 
     return {
       id: scopeId,
-      resolve: async <Config, Instance>(providerInstanceId: string, module: ProviderModule, providerId: string, rawConfig: unknown, options: { configDigest?: string } = {}) => {
+      resolve: async <Instance>(providerInstanceId: string, module: ProviderModule, providerId: string, rawConfig: unknown, options: { configDigest?: string } = {}) => {
         if (closed) throw new CoreError("scope_closed", "The provider scope is closed.");
         if (!providerInstanceId.trim()) throw new CoreError("invalid_provider_instance", "A provider instance ID is required.");
         const key = providerInstanceId;
@@ -154,7 +154,7 @@ export class ProviderRegistry {
         const registration = this.registrations.get(keyFor(module, providerId));
         if (!registration) throw new CoreError("provider_unavailable", "The selected provider is unavailable.", { module, providerId });
         instanceDefinitions.set(key, { module, providerId, configDigest });
-        const parsed = parseConfig(registration.config, rawConfig) as Config;
+        const parsed = parseConfig(registration.config, rawConfig);
         const createContext: ProviderCreateContext = { ...context, signal: scopeSignal, scopeId };
         const instancePromise = Promise.resolve()
           .then(() => registration.create(parsed, createContext))
@@ -169,7 +169,7 @@ export class ProviderRegistry {
       close: async (reason?: string) => {
         if (closed) return;
         closed = true;
-        const resolved = await Promise.allSettled([...instances.values()]);
+        const resolved = await Promise.allSettled(instances.values());
         const errors: unknown[] = [];
         for (const item of resolved) {
           if (item.status === "rejected") errors.push(item.reason);

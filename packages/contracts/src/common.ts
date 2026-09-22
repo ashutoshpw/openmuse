@@ -5,10 +5,9 @@ export const digestSchema = z.string().regex(/^[a-zA-Z0-9:_-]{8,256}$/);
 export const cursorSchema = z.string().max(2048).optional();
 
 /** ISO-8601 values are kept as strings at the transport boundary. */
-export const timestampSchema = z.string().refine(
-  (value) => !Number.isNaN(Date.parse(value)),
-  "Expected an ISO-8601 timestamp",
-);
+export const timestampSchema = z
+  .string()
+  .refine((value) => !Number.isNaN(Date.parse(value)), "Expected an ISO-8601 timestamp");
 
 export const nonEmptyTextSchema = z.string().trim().min(1);
 export const safeNameSchema = z.string().trim().min(1).max(256);
@@ -123,6 +122,9 @@ export const providerModuleSchema = z.enum([
 ]);
 
 export const providerStatusSchema = z.enum(["available", "unavailable", "disabled"]);
+export const providerInstanceScopeSchema = z.enum(["system", "workspace", "user"]);
+export const providerCredentialScopeSchema = z.enum(["workspace", "user"]);
+export const providerCredentialStatusSchema = z.enum(["active", "revoked"]);
 
 export const connectionStatusSchema = z.enum([
   "active",

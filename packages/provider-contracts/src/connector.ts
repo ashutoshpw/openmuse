@@ -1,7 +1,6 @@
 import type {
   AsyncDisposable,
   ProviderConfigDefinition,
-  ProviderCreateContext,
   ProviderJsonResult,
   ProviderOperationContext,
   ProviderRegistration,
