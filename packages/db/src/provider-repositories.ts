@@ -565,7 +565,10 @@ export class ProviderInstanceRepository {
   ): Promise<void> {
     const instance = await this.getReadable(tx, id);
     if (instance.status !== "available")
-      invalid("Only an available provider instance can be selected as the default");
+      throw new RepositoryError(
+        "Only an available provider instance can be selected as the default",
+        "conflict",
+      );
     if (scope === "workspace" && !canAdmin)
       forbidden("Workspace provider defaults require administrator access");
     if (scope === "user" && instance.userId !== this.scope.actorId)
