@@ -18,8 +18,9 @@ live.
 - [x] Add the web session/cache hardening, provider setup/share forms, and
       deterministic mocked Playwright coverage. Local evidence: 7 web tests,
       web typecheck/build, and visual desktop/mobile screenshots pass.
-- [x] Native Jest wrapper runs the current committed suite (13 tests pass in
-      the exact `e311bd3` archive; this is not device or store evidence).
+- [x] Native Jest wrapper runs the current candidate suite (20 tests across 6
+      suites pass in the exact `98ce61d` archive; this is not device or store
+      evidence).
 - [x] Auth/RLS integration runner fails closed without `TEST_DATABASE_URL` and
       provisions disposable non-owner runtime and auth roles when configured.
 - [x] Provider setup now uses one compare-and-swap request for configuration
@@ -82,9 +83,10 @@ live.
 ### Security, data, and providers
 
 - [x] Run the PostgreSQL migration, smoke, and auth/RLS integration lanes in
-      the exact `e311bd3` archive against a disposable database with explicit
-      non-owner runtime/worker roles: 27 RLS tables, 33 integration tests, and
-      219 assertions passed. This is local sidecar evidence, not hosted CI.
+      the exact `98ce61d` archive against a disposable database with explicit
+      non-owner runtime/worker roles: 27 RLS tables, 40 integration tests, and
+      293 assertions passed. The local sidecar evidence is corroborated by the
+      hosted CI lane recorded below.
 - [x] Verify provider ownership, encrypted write-only secrets, config-digest
       concurrency, sandbox cancellation/deadlines, provider-level storage and
       media bounds, and connector/model/search capability boundaries with
@@ -129,19 +131,19 @@ live.
       install, quality, format, lint, typecheck, unit, native Jest/export,
       PostgreSQL smoke plus auth integration, web Playwright, and aggregate
       gates from one exact committed SHA.
-- [x] Exact committed baseline archive `e311bd3` passed frozen install,
-      quality, format, lint, typecheck, 135 unit tests (3 skipped), native
-      Jest/export, build, 7 web Playwright tests, Docker smoke, PostgreSQL
-      migration/smoke, and 33 auth/RLS integration tests (219 assertions).
-      PostgreSQL ran in a Bun sidecar against a disposable database; this is
-      local evidence, not a final mobile-security or hosted-CI acceptance.
-- [ ] Re-run the full clean archive after the pending mobile workspace-race
-      remediation and `e58bfa9` delta, then freeze the final SHA for the
-      local release-review milestone.
-- [ ] Record the first hosted green `main` run. Remote run `35712766820` at
-      `4a006da` failed before tests because `bun install --frozen-lockfile`
-      detected a lockfile mismatch; it was not rerun or mutated.
+- [x] Fresh candidate archive `98ce61d` passed frozen install, quality,
+      format, lint, 30-package typecheck, 135 unit tests (3 skipped), native
+      Jest (20 tests across 6 suites), iOS/Android exports, build, 7 web
+      Playwright tests, PostgreSQL migration/smoke, and 40 auth/RLS
+      integration tests (293 assertions), including the seven provider-safety
+      tests from `e58bfa9`. The required local Docker/MinIO lane passed Docker
+      smoke but hit this host's known published-loopback MinIO timeout; the
+      namespace-isolated MinIO SDK smoke passed. This is a local release-review
+      milestone, not hosted CI, deployment, provider-capacity, or store proof.
+- [x] Hosted CI run `35750751590` passed every gate, including the aggregate,
+      for source SHA `98ce61d`. This proves the repository's hosted validation
+      lane, not deployment, provider capacity, or mobile store release.
 - [x] React Doctor 0.9.14 full `apps/web` scan is 91/100 with no changed-scope
       findings; two maintainability complexity warnings remain for follow-up.
-- [ ] Prove the final frozen install from a clean checkout after the CI-green
-      commit; no deployment or store-release claim is implied by local checks.
+- [x] Prove the final frozen install from the clean exact-SHA `98ce61d` archive;
+      no deployment or store-release claim is implied by local checks.
