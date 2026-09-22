@@ -25,6 +25,7 @@
     "typecheck": "turbo run typecheck",
     "test": "bun run test:unit",
     "test:unit": "vitest run --config vitest.config.ts",
+    "test:local-services": "OPENMUSE_DOCKER_SMOKE=1 OPENMUSE_MINIO_SMOKE=1 OPENMUSE_SMOKE_REQUIRED=1 vitest run --config vitest.config.ts apps/sandbox-service/test/docker.smoke.test.ts packages/providers/storage-s3/test/storage.smoke.test.ts",
     "test:auth": "bash scripts/test-auth.sh",
     "test:native": "bash scripts/test-native.sh",
     "test:pg": "bun run db:smoke",

@@ -11,6 +11,7 @@ import { createSandboxService } from "../src/service.js";
 const image =
   "ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36";
 const enabled = process.env.OPENMUSE_DOCKER_SMOKE === "1";
+const required = process.env.OPENMUSE_SMOKE_REQUIRED === "1";
 const providerId = "sandbox-docker";
 const instanceId = `docker-smoke-${process.pid}`;
 const serviceSecret = "docker-smoke-service-secret";
@@ -32,7 +33,7 @@ function operation(operationId: string): ProviderOperationContext {
 }
 
 describe("Docker disposable integration", () => {
-  it.skipIf(!enabled)(
+  (enabled || required ? it : it.skipIf(true))(
     "creates, executes, writes, reads, cancels, and destroys a real container",
     async () => {
       const runtime = createDockerCliRuntime({
@@ -155,7 +156,7 @@ describe("Docker disposable integration", () => {
     60_000,
   );
 
-  it.skipIf(!enabled)(
+  (enabled || required ? it : it.skipIf(true))(
     "performs the same lifecycle through the authenticated service boundary",
     async () => {
       const token = serviceSecret;

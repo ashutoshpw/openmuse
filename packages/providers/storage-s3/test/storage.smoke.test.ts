@@ -13,6 +13,7 @@ import { createS3StorageDriver } from "../src/index.js";
 
 const execFile = promisify(execFileCallback);
 const enabled = process.env.OPENMUSE_MINIO_SMOKE === "1";
+const required = process.env.OPENMUSE_SMOKE_REQUIRED === "1";
 const minioImage =
   "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e";
 const accessKey = "openmuse-smoke-access";
@@ -62,7 +63,7 @@ function operationFor(operationId: string, providerInstanceId: string) {
 }
 
 describe("S3 storage disposable MinIO integration", () => {
-  it.skipIf(!enabled)(
+  (enabled || required ? it : it.skipIf(true))(
     "enforces lifecycle, checksums, bounds, scope, and short signed GET URLs",
     async () => {
       const container = `openmuse-minio-storage-${process.pid}-${randomBytes(4).toString("hex")}`;
@@ -80,8 +81,8 @@ describe("S3 storage disposable MinIO integration", () => {
           "--rm",
           "--name",
           container,
-          "--network",
-          "host",
+          "--publish",
+          `127.0.0.1:${apiPort}:${apiPort}`,
           "--env",
           `MINIO_ROOT_USER=${accessKey}`,
           "--env",

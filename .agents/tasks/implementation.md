@@ -84,10 +84,17 @@ live.
       and provider-instance keys, bounded put/get/head streams, SHA-256
       metadata verification, content-type policy, exact trusted endpoint
       allowlisting, short attachment download URLs, abort/uncertain-outcome
-      handling, and cleanup-safe MinIO lifecycle smoke passed locally (11
-      policy tests plus 1 real MinIO test); independent review and integration
-      are pending. This is injected/local evidence only; no remote bucket, app
-      integration, sharing authorization, or hosted CI proof is established.
+      handling, and cleanup-safe MinIO lifecycle smoke are covered by 14
+      policy tests locally. The
+      isolated real MinIO smoke is pending CI validation. Independent review
+      and integration are pending. This is injected/local evidence only; no
+      remote bucket, app integration, sharing authorization, or hosted CI
+      proof is established.
+      On this host, Docker bridge publishing was separately diagnosed as a
+      loopback TCP connection that accepts but never receives MinIO health
+      bytes (docker0 172.17.0.0/16, published 127.0.0.1 port, DOCKER-USER
+      forwarding policy); the smoke keeps loopback-only publishing for CI and
+      does not fall back to host networking.
 - [ ] Integrate peer changes without unrelated dirty files, then pass frozen
       install, quality, format, lint, typecheck, unit, native Jest/export,
       PostgreSQL smoke plus auth integration, web Playwright, and aggregate
