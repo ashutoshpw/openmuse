@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderOperationContext, SandboxCreateRequest } from "@openmuse/provider-contracts";
 import {
   createDockerSandboxDriver,
+  DockerUnknownOutcomeError,
   type DockerContainer,
   type DockerContainerSpec,
   type DockerRuntime,
@@ -14,15 +15,22 @@ function operation(workspaceId = "workspace-1"): ProviderOperationContext {
 class FakeContainer implements DockerContainer {
   readonly id = "container-1";
   destroyed = false;
+  execError?: Error;
   lastSpec?: DockerContainerSpec;
   async inspect() {
     return {
       status: "running" as const,
       image: "node@sha256:" + "a".repeat(64),
-      labels: { "openmuse.workspace_id": "workspace-1", "openmuse.provider": "sandbox-docker" },
+      labels: {
+        "openmuse.workspace_id": "workspace-1",
+        "openmuse.provider": "sandbox-docker",
+        "openmuse.instance_id": "test-instance",
+        "openmuse.user_id": "",
+      },
     };
   }
   async exec(request: { argv: string[]; operationId: string; signal: AbortSignal }) {
+    if (this.execError) throw this.execError;
     return {
       exitCode: 0,
       stdout: request.argv.join(" "),
@@ -59,7 +67,7 @@ const request: SandboxCreateRequest = {
 describe("Docker sandbox provider", () => {
   it("enforces pinned images, workspace labels, and unprivileged networking", async () => {
     const runtime = new FakeRuntime();
-    const client = await createDockerSandboxDriver({ runtime }).create(
+    const client = await createDockerSandboxDriver({ runtime, instanceId: "test-instance" }).create(
       { allowedImages: [request.image!] },
       { signal: new AbortController().signal, scopeId: "scope", workspaceId: "workspace-1" },
     );
@@ -83,7 +91,7 @@ describe("Docker sandbox provider", () => {
 
   it("rejects cross-workspace reconnects and cleans resources", async () => {
     const runtime = new FakeRuntime();
-    const client = await createDockerSandboxDriver({ runtime }).create(
+    const client = await createDockerSandboxDriver({ runtime, instanceId: "test-instance" }).create(
       { allowedImages: [request.image!] },
       { signal: new AbortController().signal, scopeId: "scope", workspaceId: "workspace-1" },
     );
@@ -93,5 +101,31 @@ describe("Docker sandbox provider", () => {
     const sandbox = await client.reconnect("container-1", operation());
     await sandbox.close("test cleanup");
     expect(runtime.container.destroyed).toBe(true);
+  });
+
+  it("preserves unknown cleanup outcomes", async () => {
+    const runtime = new FakeRuntime();
+    const client = await createDockerSandboxDriver({ runtime, instanceId: "test-instance" }).create(
+      { allowedImages: [request.image!] },
+      { signal: new AbortController().signal, scopeId: "scope", workspaceId: "workspace-1" },
+    );
+    runtime.container.execError = new DockerUnknownOutcomeError("cleanup could not be verified");
+    const sandbox = await client.reconnect("container-1", operation());
+    await expect(sandbox.execute({ argv: ["echo", "ok"] }, operation())).rejects.toMatchObject({
+      code: "unknown_outcome",
+      uncertain: true,
+    });
+  });
+
+  it("applies maxSeconds to reconnect metadata", async () => {
+    const runtime = new FakeRuntime();
+    const client = await createDockerSandboxDriver({ runtime, instanceId: "test-instance" }).create(
+      { allowedImages: [request.image!], maxSeconds: 5 },
+      { signal: new AbortController().signal, scopeId: "scope", workspaceId: "workspace-1" },
+    );
+    const sandbox = await client.reconnect("container-1", operation());
+    await expect(
+      sandbox.execute({ argv: ["sleep", "1"], timeoutSeconds: 6 }, operation()),
+    ).rejects.toMatchObject({ code: "invalid_request" });
   });
 });

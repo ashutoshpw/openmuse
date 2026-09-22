@@ -5,6 +5,7 @@ export * from "./media.js";
 export * from "./realtime.js";
 export * from "./search.js";
 export * from "./sandbox.js";
+export * from "./sandbox-auth.js";
 export * from "./browser.js";
 export * from "./storage.js";
 export * from "./connector.js";

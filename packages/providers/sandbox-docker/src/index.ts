@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ProviderOperationError,
+  createSandboxScopeToken,
   type ProviderCreateContext,
   type ProviderOperationContext,
   type Sandbox,
@@ -38,9 +39,23 @@ export interface DockerExecOutcome extends SandboxExecResult {
   providerOperationId: string;
 }
 
+/**
+ * A Docker operation failed after its container cleanup could not be verified.
+ * The provider adapter preserves this marker as `unknown_outcome` instead of
+ * turning an uncertain result into an ordinary failure.
+ */
+export class DockerUnknownOutcomeError extends Error {
+  readonly unknownOutcome = true;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "DockerUnknownOutcomeError";
+  }
+}
+
 export interface DockerContainer {
   readonly id: string;
-  inspect(): Promise<{
+  inspect(signal?: AbortSignal): Promise<{
     status: "creating" | "running" | "stopped" | "destroyed" | "unknown";
     image?: string;
     labels: Readonly<Record<string, string>>;
@@ -48,8 +63,8 @@ export interface DockerContainer {
   exec(request: DockerExecRequest): Promise<DockerExecOutcome>;
   readFile(path: string, signal: AbortSignal): Promise<Uint8Array>;
   writeFile(file: SandboxFile, signal: AbortSignal): Promise<void>;
-  cancel?(operationId: string): Promise<void>;
-  destroy(reason?: string): Promise<void>;
+  cancel?(operationId: string, signal?: AbortSignal): Promise<void>;
+  destroy(reason?: string, signal?: AbortSignal): Promise<void>;
 }
 
 export interface DockerRuntime {
@@ -60,13 +75,17 @@ export interface DockerRuntime {
 export interface HttpDockerRuntimeOptions {
   endpoint: string;
   serviceToken: string;
-  workspaceId?: string;
+  workspaceId: string;
+  providerId: string;
+  instanceId: string;
+  userId?: string;
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 }
 
 export interface DockerSandboxDriverOptions {
   runtime?: DockerRuntime;
   providerId?: string;
+  instanceId?: string;
   displayName?: string;
 }
 
@@ -121,6 +140,8 @@ const defaultLimits: Required<SandboxLimits> = {
   timeoutSeconds: 60,
 };
 
+const containerOperationTimeoutMs = 10_000;
+
 const pinnedImage = /^[^@\s]+@sha256:[0-9a-f]{64}$/i;
 
 function providerError(
@@ -174,7 +195,7 @@ function assertPinnedImage(
       "Docker sandbox images must be pinned by a sha256 digest.",
       "The sandbox image is not allowed.",
     );
-  if (allowedImages.length > 0 && !allowedImages.includes(image))
+  if (allowedImages.length === 0 || !allowedImages.includes(image))
     throw providerError(
       providerId,
       "create",
@@ -291,6 +312,66 @@ function childSignal(
   };
 }
 
+interface ManagedSignal {
+  signal: AbortSignal;
+  dispose: () => void;
+}
+
+function boundedSignal(
+  parent: AbortSignal | undefined,
+  timeoutMs = containerOperationTimeoutMs,
+): ManagedSignal {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort("container operation deadline"), timeoutMs);
+  const abort = () => controller.abort(parent?.reason ?? "container operation cancelled");
+  if (parent) {
+    if (parent.aborted) abort();
+    else parent.addEventListener("abort", abort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timeout);
+      parent?.removeEventListener("abort", abort);
+    },
+  };
+}
+
+function abortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason;
+  const error = new Error(typeof reason === "string" ? reason : "The operation was cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+/**
+ * AbortSignal cancellation must also bound provider implementations that do
+ * not correctly observe their signal. The underlying promise remains owned by
+ * the provider, but its rejection is consumed so it cannot become unhandled.
+ */
+function abortable<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortError(signal)));
+    const pending = signal.aborted
+      ? Promise.reject<T>(abortError(signal))
+      : Promise.resolve().then(operation);
+    pending.then(
+      (value) => finish(() => resolve(value)),
+      (cause) => finish(() => reject(cause)),
+    );
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function assertNotAborted(
   context: ProviderOperationContext,
   operation: string,
@@ -306,6 +387,26 @@ function assertNotAborted(
     );
 }
 
+function matchesBinding(
+  labels: Readonly<Record<string, string>>,
+  createContext: ProviderCreateContext,
+  providerId: string,
+  instanceId: string,
+  operation?: ProviderOperationContext,
+): boolean {
+  if (
+    labels["openmuse.workspace_id"] !== createContext.workspaceId ||
+    labels["openmuse.provider"] !== providerId ||
+    labels["openmuse.instance_id"] !== instanceId ||
+    labels["openmuse.user_id"] !== (createContext.userId ?? "")
+  )
+    return false;
+  if (operation?.workspaceId !== undefined && operation.workspaceId !== createContext.workspaceId)
+    return false;
+  if (operation?.userId !== undefined && operation.userId !== createContext.userId) return false;
+  return true;
+}
+
 interface DockerSandboxConfig extends SandboxConfig {
   hosted: boolean;
   allowedImages: string[];
@@ -316,6 +417,7 @@ interface DockerSandboxConfig extends SandboxConfig {
 
 export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = {}): SandboxDriver {
   const providerId = options.providerId ?? "sandbox-docker";
+  const instanceId = options.instanceId ?? crypto.randomUUID();
   const displayName = options.displayName ?? "Docker sandbox (trusted local)";
   const driver: SandboxDriver = {
     module: "sandbox",
@@ -339,8 +441,9 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
     config: { version: "1", schema: configSchema },
     async create(
       rawConfig: SandboxConfig,
-      createContext: ProviderCreateContext,
+      rawCreateContext: ProviderCreateContext,
     ): Promise<SandboxClient> {
+      const createContext = Object.freeze({ ...rawCreateContext });
       const config = configSchema.parse(rawConfig) as DockerSandboxConfig;
       if (config.hosted)
         throw providerError(
@@ -377,7 +480,7 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
         operation: ProviderOperationContext,
       ): Promise<Sandbox> => {
         ensureOpen("reconnect");
-        workspaceId(createContext, operation);
+        const boundWorkspace = workspaceId(createContext, operation);
         if (!id.trim())
           throw providerError(
             providerId,
@@ -395,11 +498,11 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
             "The sandbox was not found.",
           );
         });
-        const inspected = await container.inspect();
-        if (
-          inspected.labels["openmuse.workspace_id"] !== createContext.workspaceId ||
-          inspected.labels["openmuse.provider"] !== providerId
-        )
+        const inspected = await abortable(
+          () => container.inspect(operation.signal),
+          operation.signal,
+        );
+        if (!matchesBinding(inspected.labels, createContext, providerId, instanceId, operation))
           throw providerError(
             providerId,
             "reconnect",
@@ -410,18 +513,27 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
         const metadata: SandboxMetadata = {
           id: container.id,
           providerId,
-          workspaceId: createContext.workspaceId,
+          workspaceId: boundWorkspace,
           ...(inspected.image ? { image: inspected.image } : {}),
           status: inspected.status,
-          limits: { ...defaultLimits, ...config.maxLimits },
+          limits: {
+            ...defaultLimits,
+            ...config.maxLimits,
+            timeoutSeconds: Math.min(
+              config.maxLimits?.timeoutSeconds ?? defaultLimits.timeoutSeconds,
+              config.maxSeconds,
+            ),
+          },
         };
         const resource = new SandboxResource(
           container,
           metadata,
           providerId,
-          createContext.workspaceId,
+          boundWorkspace,
+          instanceId,
           config.maxFileBytes,
           config.maxOutputBytes,
+          createContext.userId,
           ensureOpen,
         );
         owned.set(resource.id, resource);
@@ -436,6 +548,14 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
           ensureOpen("create");
           const boundWorkspace = workspaceId(createContext, operation);
           assertNotAborted(operation, "create", providerId);
+          if (request.workspaceId !== undefined && request.workspaceId !== boundWorkspace)
+            throw providerError(
+              providerId,
+              "create",
+              "permission_denied",
+              "A sandbox workspace binding is required and cannot change during creation.",
+              "The sandbox is not available in this workspace.",
+            );
           const image = request.image ?? config.image;
           if (!image)
             throw providerError(
@@ -446,20 +566,50 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
             );
           assertPinnedImage(image, config.allowedImages, providerId);
           const limits = mergeLimits(config, request);
-          const container = await runtime.create(
-            {
-              image,
-              labels: {
-                "openmuse.provider": providerId,
-                "openmuse.workspace_id": boundWorkspace,
+          let container: DockerContainer;
+          try {
+            container = await runtime.create(
+              {
+                image,
+                labels: {
+                  "openmuse.provider": providerId,
+                  "openmuse.workspace_id": boundWorkspace,
+                  "openmuse.instance_id": instanceId,
+                  "openmuse.user_id": createContext.userId ?? "",
+                },
+                limits,
+                networkDisabled: true,
+                privileged: false,
+                mounts: [],
               },
-              limits,
-              networkDisabled: true,
-              privileged: false,
-              mounts: [],
-            },
-            operation.signal,
-          );
+              operation.signal,
+            );
+          } catch (error) {
+            if (isDockerUnknownOutcome(error))
+              throw providerError(
+                providerId,
+                "create",
+                "unknown_outcome",
+                error instanceof Error
+                  ? error.message
+                  : "Docker sandbox creation cleanup is unknown.",
+                "The sandbox creation cleanup outcome is unknown.",
+              );
+            if (operation.signal.aborted)
+              throw providerError(
+                providerId,
+                "create",
+                "cancelled",
+                "The sandbox creation was cancelled.",
+              );
+            throw providerError(
+              providerId,
+              "create",
+              "failed",
+              error instanceof Error ? error.message : "Docker sandbox creation failed.",
+              "The sandbox could not be created.",
+            );
+          }
           const metadata: SandboxMetadata = {
             id: container.id,
             providerId,
@@ -474,8 +624,10 @@ export function createDockerSandboxDriver(options: DockerSandboxDriverOptions = 
             metadata,
             providerId,
             boundWorkspace,
+            instanceId,
             config.maxFileBytes,
             config.maxOutputBytes,
+            createContext.userId,
             ensureOpen,
           );
           owned.set(resource.id, resource);
@@ -527,10 +679,19 @@ export function createHttpDockerRuntime(options: HttpDockerRuntimeOptions): Dock
   const doFetch = options.fetch ?? globalThis.fetch;
   const request = async <T>(path: string, init: RequestInit, signal: AbortSignal): Promise<T> => {
     const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${options.serviceToken}`);
-    if (options.workspaceId) headers.set("X-OpenMuse-Workspace", options.workspaceId);
+    const token = await createSandboxScopeToken(options.serviceToken, {
+      workspaceId: options.workspaceId,
+      providerId: options.providerId,
+      instanceId: options.instanceId,
+      ...(options.userId ? { userId: options.userId } : {}),
+      expiresAt: Math.floor(Date.now() / 1000) + 60,
+    });
+    headers.set("Authorization", `Bearer ${token}`);
     if (init.body !== undefined) headers.set("Content-Type", "application/json");
-    const response = await doFetch(`${endpoint}${path}`, { ...init, headers, signal });
+    const response = await abortable(
+      () => doFetch(`${endpoint}${path}`, { ...init, headers, signal }),
+      signal,
+    );
     const raw = await response.text();
     let value: unknown;
     try {
@@ -539,6 +700,12 @@ export function createHttpDockerRuntime(options: HttpDockerRuntimeOptions): Dock
       value = undefined;
     }
     if (!response.ok) {
+      const code =
+        value && typeof value === "object" && "code" in value && value.code === "unknown_outcome"
+          ? "unknown_outcome"
+          : undefined;
+      if (code === "unknown_outcome")
+        throw new DockerUnknownOutcomeError("The sandbox service cleanup outcome is unknown.");
       const message =
         value && typeof value === "object" && "error" in value && typeof value.error === "string"
           ? value.error
@@ -572,16 +739,21 @@ class HttpDockerContainer implements DockerContainer {
     private readonly request: HttpRequest,
   ) {}
 
-  async inspect() {
-    return this.request<{
-      status: "creating" | "running" | "stopped" | "destroyed" | "unknown";
-      image?: string;
-      labels: Readonly<Record<string, string>>;
-    }>(
-      `/v1/sandboxes/${encodeURIComponent(this.id)}`,
-      { method: "GET" },
-      new AbortController().signal,
-    );
+  async inspect(signal?: AbortSignal) {
+    const bounded = boundedSignal(signal);
+    try {
+      return await abortable(
+        () =>
+          this.request<{
+            status: "creating" | "running" | "stopped" | "destroyed" | "unknown";
+            image?: string;
+            labels: Readonly<Record<string, string>>;
+          }>(`/v1/sandboxes/${encodeURIComponent(this.id)}`, { method: "GET" }, bounded.signal),
+        bounded.signal,
+      );
+    } finally {
+      bounded.dispose();
+    }
   }
 
   async exec(request: DockerExecRequest): Promise<DockerExecOutcome> {
@@ -625,20 +797,39 @@ class HttpDockerContainer implements DockerContainer {
     );
   }
 
-  async cancel(operationId: string): Promise<void> {
-    await this.request(
-      `/v1/sandboxes/${encodeURIComponent(this.id)}/operations/${encodeURIComponent(operationId)}/cancel`,
-      { method: "POST" },
-      new AbortController().signal,
-    );
+  async cancel(operationId: string, signal?: AbortSignal): Promise<void> {
+    const bounded = boundedSignal(signal);
+    try {
+      await abortable(
+        () =>
+          this.request(
+            `/v1/sandboxes/${encodeURIComponent(this.id)}/operations/${encodeURIComponent(operationId)}/cancel`,
+            { method: "POST" },
+            bounded.signal,
+          ),
+        bounded.signal,
+      );
+    } finally {
+      bounded.dispose();
+    }
   }
 
-  async destroy(): Promise<void> {
-    await this.request(
-      `/v1/sandboxes/${encodeURIComponent(this.id)}`,
-      { method: "DELETE" },
-      new AbortController().signal,
-    );
+  async destroy(reason?: string, signal?: AbortSignal): Promise<void> {
+    void reason;
+    const bounded = boundedSignal(signal);
+    try {
+      await abortable(
+        () =>
+          this.request(
+            `/v1/sandboxes/${encodeURIComponent(this.id)}`,
+            { method: "DELETE" },
+            bounded.signal,
+          ),
+        bounded.signal,
+      );
+    } finally {
+      bounded.dispose();
+    }
   }
 }
 
@@ -670,8 +861,10 @@ class SandboxResource implements Sandbox {
     metadata: SandboxMetadata,
     private readonly providerId: string,
     private readonly boundWorkspaceId: string,
+    private readonly boundInstanceId: string,
     private readonly maxFileBytes: number,
     private readonly maxOutputBytes: number,
+    private readonly boundUserId: string | undefined,
     private readonly ensureOpen: (operation: string) => void,
   ) {
     this.id = container.id;
@@ -689,9 +882,9 @@ class SandboxResource implements Sandbox {
     request: SandboxExecRequest,
     context: ProviderOperationContext,
   ): Promise<SandboxExecResult> {
-    this.ensureOpen("execute");
+    this.ensureUsable("execute");
     assertNotAborted(context, "execute", this.providerId);
-    await this.assertOwnership("execute", context.signal);
+    await this.assertOwnership("execute", context.signal, context);
     if (request.argv.length === 0 || request.argv.some((argument) => typeof argument !== "string"))
       throw providerError(
         this.providerId,
@@ -734,9 +927,23 @@ class SandboxResource implements Sandbox {
         ? { ...result, timedOut: true, exitCode: result.exitCode === 0 ? 124 : result.exitCode }
         : result;
     } catch (error) {
+      if (isDockerUnknownOutcome(error))
+        throw providerError(
+          this.providerId,
+          "execute",
+          "unknown_outcome",
+          error instanceof Error ? error.message : "Docker sandbox cleanup outcome is unknown.",
+          "The sandbox command cleanup outcome is unknown.",
+        );
       if (child.timedOut()) {
+        const cancellation = boundedSignal(undefined);
         try {
-          await this.container.cancel?.(context.operationId);
+          await abortable(
+            () =>
+              this.container.cancel?.(context.operationId, cancellation.signal) ??
+              Promise.resolve(),
+            cancellation.signal,
+          );
         } catch (cancellationError) {
           throw providerError(
             this.providerId,
@@ -747,7 +954,11 @@ class SandboxResource implements Sandbox {
               : "Docker sandbox cancellation failed.",
             "The sandbox command outcome is unknown.",
           );
+        } finally {
+          cancellation.dispose();
         }
+        this.metadata.status = "destroyed";
+        this.destroyed = true;
         return {
           exitCode: 124,
           stdout: "",
@@ -756,13 +967,16 @@ class SandboxResource implements Sandbox {
           providerOperationId: context.operationId,
         };
       }
-      if (context.signal.aborted)
+      if (context.signal.aborted) {
+        this.metadata.status = "destroyed";
+        this.destroyed = true;
         throw providerError(
           this.providerId,
           "execute",
           "cancelled",
           "The sandbox command was cancelled.",
         );
+      }
       throw providerError(
         this.providerId,
         "execute",
@@ -776,9 +990,9 @@ class SandboxResource implements Sandbox {
   }
 
   async readFile(path: string, context: ProviderOperationContext): Promise<Uint8Array> {
-    this.ensureOpen("readFile");
+    this.ensureUsable("readFile");
     assertNotAborted(context, "readFile", this.providerId);
-    await this.assertOwnership("readFile", context.signal);
+    await this.assertOwnership("readFile", context.signal, context);
     return this.container
       .readFile(safeWorkspacePath(path, "readFile"), context.signal)
       .then((bytes) => {
@@ -793,6 +1007,16 @@ class SandboxResource implements Sandbox {
         return bytes;
       })
       .catch((error) => {
+        if (isDockerUnknownOutcome(error))
+          throw providerError(
+            this.providerId,
+            "readFile",
+            "unknown_outcome",
+            error instanceof Error
+              ? error.message
+              : "Docker sandbox file cleanup outcome is unknown.",
+            "The sandbox file read cleanup outcome is unknown.",
+          );
         if (context.signal.aborted)
           throw providerError(
             this.providerId,
@@ -811,9 +1035,9 @@ class SandboxResource implements Sandbox {
   }
 
   async writeFile(file: SandboxFile, context: ProviderOperationContext): Promise<void> {
-    this.ensureOpen("writeFile");
+    this.ensureUsable("writeFile");
     assertNotAborted(context, "writeFile", this.providerId);
-    await this.assertOwnership("writeFile", context.signal);
+    await this.assertOwnership("writeFile", context.signal, context);
     const bytes = new Uint8Array(file.bytes);
     if (bytes.byteLength > this.maxFileBytes)
       throw providerError(
@@ -829,6 +1053,16 @@ class SandboxResource implements Sandbox {
         context.signal,
       )
       .catch((error) => {
+        if (isDockerUnknownOutcome(error))
+          throw providerError(
+            this.providerId,
+            "writeFile",
+            "unknown_outcome",
+            error instanceof Error
+              ? error.message
+              : "Docker sandbox file cleanup outcome is unknown.",
+            "The sandbox file write cleanup outcome is unknown.",
+          );
         if (context.signal.aborted)
           throw providerError(
             this.providerId,
@@ -848,20 +1082,34 @@ class SandboxResource implements Sandbox {
 
   async destroy(context?: ProviderOperationContext, reason = "sandbox destroyed"): Promise<void> {
     if (this.destroyed) return;
-    if (context) {
-      assertNotAborted(context, "destroy", this.providerId);
-      await this.assertOwnership("destroy", context.signal);
-    }
+    const lifecycle = boundedSignal(context?.signal);
     try {
-      await this.container.destroy(reason);
-    } catch (error) {
-      throw providerError(
-        this.providerId,
-        "destroy",
-        "unknown_outcome",
-        error instanceof Error ? error.message : "Docker sandbox cleanup failed.",
-        "The sandbox cleanup outcome is unknown.",
-      );
+      if (context) assertNotAborted(context, "destroy", this.providerId);
+      try {
+        await this.assertOwnership("destroy", lifecycle.signal, context);
+      } catch (error) {
+        if (error instanceof ProviderOperationError) throw error;
+        throw providerError(
+          this.providerId,
+          "destroy",
+          "unknown_outcome",
+          error instanceof Error ? error.message : "Docker sandbox inspection failed.",
+          "The sandbox cleanup outcome is unknown.",
+        );
+      }
+      try {
+        await abortable(() => this.container.destroy(reason, lifecycle.signal), lifecycle.signal);
+      } catch (error) {
+        throw providerError(
+          this.providerId,
+          "destroy",
+          "unknown_outcome",
+          error instanceof Error ? error.message : "Docker sandbox cleanup failed.",
+          "The sandbox cleanup outcome is unknown.",
+        );
+      }
+    } finally {
+      lifecycle.dispose();
     }
     this.metadata.status = "destroyed";
     this.destroyed = true;
@@ -871,17 +1119,43 @@ class SandboxResource implements Sandbox {
     await this.destroy(undefined, reason ?? "sandbox closed");
   }
 
-  private async assertOwnership(operation: string, signal: AbortSignal): Promise<void> {
-    const inspected = await this.container.inspect();
+  private ensureUsable(operation: string): void {
+    this.ensureOpen(operation);
+    if (this.destroyed)
+      throw providerError(
+        this.providerId,
+        operation,
+        "failed",
+        "The Docker sandbox resource has already been destroyed.",
+        "The sandbox is no longer available.",
+      );
+  }
+
+  private async assertOwnership(
+    operation: string,
+    signal: AbortSignal,
+    context?: ProviderOperationContext,
+  ): Promise<void> {
+    const inspected = await abortable(() => this.container.inspect(signal), signal);
     if (
       inspected.labels["openmuse.workspace_id"] !== this.boundWorkspaceId ||
-      inspected.labels["openmuse.provider"] !== this.providerId
+      inspected.labels["openmuse.provider"] !== this.providerId ||
+      inspected.labels["openmuse.instance_id"] !== this.boundInstanceId ||
+      inspected.labels["openmuse.user_id"] !== (this.boundUserId ?? "")
     )
       throw providerError(
         this.providerId,
         operation,
         "permission_denied",
         "Docker sandbox ownership labels no longer match the bound workspace.",
+        "The sandbox is not available in this workspace.",
+      );
+    if (context && !matchesOperationBinding(context, this.boundWorkspaceId, this.boundUserId))
+      throw providerError(
+        this.providerId,
+        operation,
+        "permission_denied",
+        "Docker sandbox operation binding did not match the resource owner.",
         "The sandbox is not available in this workspace.",
       );
     if (signal.aborted)
@@ -892,6 +1166,31 @@ class SandboxResource implements Sandbox {
         "The sandbox operation was cancelled.",
       );
   }
+}
+
+function matchesOperationBinding(
+  context: ProviderOperationContext,
+  boundWorkspaceId: string,
+  userId: string | undefined,
+): boolean {
+  return (
+    (context.workspaceId === undefined || context.workspaceId === boundWorkspaceId) &&
+    (context.userId === undefined || context.userId === userId)
+  );
+}
+
+function isDockerUnknownOutcome(error: unknown): boolean {
+  return (
+    error instanceof DockerUnknownOutcomeError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "unknownOutcome" in error &&
+      error.unknownOutcome === true) ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "unknown_outcome")
+  );
 }
 
 export { configSchema as dockerSandboxConfigSchema };

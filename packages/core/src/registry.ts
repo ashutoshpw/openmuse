@@ -42,7 +42,10 @@ function keyFor(module: ProviderModule, providerId: string): string {
 function stableConfig(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableConfig).join(",")}]`;
-  return `{${Object.keys(value as object).sort().map((key) => `${JSON.stringify(key)}:${stableConfig((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  return `{${Object.keys(value as object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableConfig((value as Record<string, unknown>)[key])}`)
+    .join(",")}}`;
 }
 
 function parseConfig<Config>(definition: ProviderConfigDefinition<Config>, input: unknown): Config {
@@ -50,7 +53,10 @@ function parseConfig<Config>(definition: ProviderConfigDefinition<Config>, input
   const parsed = definition.schema.safeParse(withDefaults);
   if (!parsed.success) {
     throw new CoreError("invalid_provider_config", "The provider configuration is invalid.", {
-      issues: parsed.error.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code })),
+      issues: parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        code: issue.code,
+      })),
     });
   }
   return parsed.data;
@@ -59,15 +65,26 @@ function parseConfig<Config>(definition: ProviderConfigDefinition<Config>, input
 export class ProviderRegistry {
   private readonly registrations = new Map<string, AnyRegistration>();
 
-  constructor(private readonly options: { allowRegistration?: (registration: ProviderRegistrationView) => boolean } = {}) {}
+  constructor(
+    private readonly options: {
+      allowRegistration?: (registration: ProviderRegistrationView) => boolean;
+    } = {},
+  ) {}
 
   register<Config, Instance>(registration: ProviderRegistration<Config, Instance>): void {
     const key = keyFor(registration.module, registration.providerId);
-    if (registration.metadata.providerId !== registration.providerId || registration.metadata.configVersion !== registration.config.version) {
-      throw new CoreError("provider_metadata_mismatch", "Provider metadata does not match its registration.", {
-        module: registration.module,
-        providerId: registration.providerId,
-      });
+    if (
+      registration.metadata.providerId !== registration.providerId ||
+      registration.metadata.configVersion !== registration.config.version
+    ) {
+      throw new CoreError(
+        "provider_metadata_mismatch",
+        "Provider metadata does not match its registration.",
+        {
+          module: registration.module,
+          providerId: registration.providerId,
+        },
+      );
     }
     const view: ProviderRegistrationView = {
       module: registration.module,
@@ -77,16 +94,24 @@ export class ProviderRegistry {
       capabilities: registration.metadata.capabilities.map((capability) => capability.key),
     };
     if (this.options.allowRegistration && !this.options.allowRegistration(view)) {
-      throw new CoreError("provider_not_allowlisted", "This provider is not allowlisted for this runtime.", {
-        module: registration.module,
-        providerId: registration.providerId,
-      });
+      throw new CoreError(
+        "provider_not_allowlisted",
+        "This provider is not allowlisted for this runtime.",
+        {
+          module: registration.module,
+          providerId: registration.providerId,
+        },
+      );
     }
     if (this.registrations.has(key)) {
-      throw new CoreError("duplicate_provider", "A provider with this module and ID is already registered.", {
-        module: registration.module,
-        providerId: registration.providerId,
-      });
+      throw new CoreError(
+        "duplicate_provider",
+        "A provider with this module and ID is already registered.",
+        {
+          module: registration.module,
+          providerId: registration.providerId,
+        },
+      );
     }
     this.registrations.set(key, registration as AnyRegistration);
   }
@@ -98,7 +123,10 @@ export class ProviderRegistry {
   get(module: ProviderModule, providerId: string): ProviderRegistrationView {
     const registration = this.registrations.get(keyFor(module, providerId));
     if (!registration) {
-      throw new CoreError("provider_unavailable", "The selected provider is unavailable.", { module, providerId });
+      throw new CoreError("provider_unavailable", "The selected provider is unavailable.", {
+        module,
+        providerId,
+      });
     }
     return {
       module: registration.module,
@@ -109,6 +137,21 @@ export class ProviderRegistry {
     };
   }
 
+  /**
+   * Parse provider configuration without constructing a provider client.
+   * Server-side catalogues use this at the API boundary; the core registry
+   * remains vendor-neutral and never decides which providers are trusted.
+   */
+  normalizeConfig(module: ProviderModule, providerId: string, input: unknown): unknown {
+    const registration = this.registrations.get(keyFor(module, providerId));
+    if (!registration)
+      throw new CoreError("provider_unavailable", "The selected provider is unavailable.", {
+        module,
+        providerId,
+      });
+    return parseConfig(registration.config, input);
+  }
+
   list(module?: ProviderModule): ProviderRegistrationView[] {
     return [...this.registrations.values()]
       .filter((registration) => module === undefined || registration.module === module)
@@ -117,13 +160,18 @@ export class ProviderRegistry {
 
   assertCapability(module: ProviderModule, providerId: string, capability: string): void {
     const registration = this.registrations.get(keyFor(module, providerId));
-    if (!registration) throw new CoreError("provider_unavailable", "The selected provider is unavailable.");
+    if (!registration)
+      throw new CoreError("provider_unavailable", "The selected provider is unavailable.");
     if (!registration.metadata.capabilities.some((item) => item.key === capability)) {
-      throw new CoreError("provider_capability_missing", "The selected provider does not support this capability.", {
-        module,
-        providerId,
-        capability,
-      });
+      throw new CoreError(
+        "provider_capability_missing",
+        "The selected provider does not support this capability.",
+        {
+          module,
+          providerId,
+          capability,
+        },
+      );
     }
   }
 
@@ -131,28 +179,51 @@ export class ProviderRegistry {
     const scopeId = context.scopeId ?? `scope-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const scopeSignal = context.signal ?? new AbortController().signal;
     const instances = new Map<string, Promise<unknown>>();
-    const instanceDefinitions = new Map<string, { module: ProviderModule; providerId: string; configDigest: string }>();
+    const instanceDefinitions = new Map<
+      string,
+      { module: ProviderModule; providerId: string; configDigest: string }
+    >();
     let closed = false;
 
     return {
       id: scopeId,
-      resolve: async <Instance>(providerInstanceId: string, module: ProviderModule, providerId: string, rawConfig: unknown, options: { configDigest?: string } = {}) => {
+      resolve: async <Instance>(
+        providerInstanceId: string,
+        module: ProviderModule,
+        providerId: string,
+        rawConfig: unknown,
+        options: { configDigest?: string } = {},
+      ) => {
         if (closed) throw new CoreError("scope_closed", "The provider scope is closed.");
-        if (!providerInstanceId.trim()) throw new CoreError("invalid_provider_instance", "A provider instance ID is required.");
+        if (!providerInstanceId.trim())
+          throw new CoreError("invalid_provider_instance", "A provider instance ID is required.");
         const key = providerInstanceId;
         const configDigest = options.configDigest ?? stableConfig(rawConfig);
         const priorDefinition = instanceDefinitions.get(key);
-        if (priorDefinition && (priorDefinition.module !== module || priorDefinition.providerId !== providerId || priorDefinition.configDigest !== configDigest)) {
-          throw new CoreError("provider_instance_conflict", "A provider instance ID cannot be reused with different provider configuration.", {
-            providerInstanceId,
-            module,
-            providerId,
-          });
+        if (
+          priorDefinition &&
+          (priorDefinition.module !== module ||
+            priorDefinition.providerId !== providerId ||
+            priorDefinition.configDigest !== configDigest)
+        ) {
+          throw new CoreError(
+            "provider_instance_conflict",
+            "A provider instance ID cannot be reused with different provider configuration.",
+            {
+              providerInstanceId,
+              module,
+              providerId,
+            },
+          );
         }
         const existing = instances.get(key);
         if (existing) return (await existing) as Instance;
         const registration = this.registrations.get(keyFor(module, providerId));
-        if (!registration) throw new CoreError("provider_unavailable", "The selected provider is unavailable.", { module, providerId });
+        if (!registration)
+          throw new CoreError("provider_unavailable", "The selected provider is unavailable.", {
+            module,
+            providerId,
+          });
         instanceDefinitions.set(key, { module, providerId, configDigest });
         const parsed = parseConfig(registration.config, rawConfig);
         const createContext: ProviderCreateContext = { ...context, signal: scopeSignal, scopeId };
@@ -182,9 +253,13 @@ export class ProviderRegistry {
           }
         }
         if (errors.length > 0) {
-          throw new CoreError("scope_close_failed", "One or more provider resources failed to close.", {
-            errors: errors.map((error) => redact(error)),
-          });
+          throw new CoreError(
+            "scope_close_failed",
+            "One or more provider resources failed to close.",
+            {
+              errors: errors.map((error) => redact(error)),
+            },
+          );
         }
       },
     };
