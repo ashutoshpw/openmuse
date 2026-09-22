@@ -24,24 +24,6 @@ function provider(overrides: Partial<ProviderInstance> = {}): ProviderInstance {
   };
 }
 
-function credential(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "credential-1",
-    createdAt: "2026-09-22T00:00:00.000Z",
-    updatedAt: "2026-09-22T00:00:00.000Z",
-    workspaceId: "workspace-1",
-    providerInstanceId: "instance-1",
-    scope: "workspace" as const,
-    ownerUserId: null,
-    providerId: "openai",
-    credentialKind: "apiKey",
-    keyVersion: 1,
-    secretRevision: 1,
-    status: "active" as const,
-    ...overrides,
-  };
-}
-
 function client(overrides: Record<string, unknown> = {}) {
   const target = provider({
     id: "instance-1",
@@ -51,95 +33,85 @@ function client(overrides: Record<string, unknown> = {}) {
   });
   return {
     createProviderInstance: jest.fn().mockResolvedValue(target),
-    listProviderCredentials: jest
-      .fn()
-      .mockResolvedValue({ items: [], page: { nextCursor: null, hasMore: false } }),
-    createProviderCredential: jest.fn().mockImplementation(async (input: any) =>
-      credential({
-        id: "credential-created",
-        providerInstanceId: input.providerInstanceId,
-        scope: input.scope,
-      }),
-    ),
-    updateProviderCredential: jest
-      .fn()
-      .mockImplementation(async (id: string) => credential({ id })),
-    updateProviderInstance: jest.fn().mockResolvedValue(target),
+    setupProviderInstance: jest.fn().mockResolvedValue(target),
     ...overrides,
   };
 }
 
 describe("mobile provider setup", () => {
-  it("derives workspace scope from a system catalog provider", async () => {
-    const api = client();
-    await saveProviderSetup({ api, provider: provider(), config: {}, secrets: {} });
-
-    expect(api.createProviderInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "workspace", credentialBindings: [] }),
-    );
-  });
-
-  it("creates a credential with the typed encrypted-secret payload", async () => {
+  it("creates a workspace instance and submits one atomic setup", async () => {
     const api = client();
     await saveProviderSetup({
       api,
       provider: provider(),
-      config: {},
+      displayName: "My OpenAI",
+      config: { endpoint: "https://api.example.com" },
       secrets: { apiKey: "sk-mobile" },
     });
 
-    expect(api.createProviderCredential).toHaveBeenCalledWith({
-      providerId: "openai",
-      providerInstanceId: "instance-1",
-      credentialKind: "apiKey",
-      scope: "workspace",
-      secret: "sk-mobile",
+    expect(api.createProviderInstance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        module: "model",
+        scope: "workspace",
+        credentialBindings: [],
+      }),
+    );
+    expect(api.setupProviderInstance).toHaveBeenCalledWith("instance-1", {
+      expectedConfigDigest: "digest-instance",
+      displayName: "My OpenAI",
+      config: { endpoint: "https://api.example.com" },
+      secrets: { apiKey: "sk-mobile" },
     });
-    expect(api.updateProviderInstance.mock.calls[0]?.[1]).not.toHaveProperty("apiKey");
   });
 
-  it("pins credential bindings with the provider config digest", async () => {
+  it("uses one atomic setup for an existing instance and never calls credential APIs", async () => {
     const api = client();
     await saveProviderSetup({
       api,
-      provider: provider(),
-      config: { defaultModel: "gpt" },
-      secrets: {},
-    });
-
-    expect(api.updateProviderInstance).toHaveBeenCalledWith("instance-1", {
-      config: { defaultModel: "gpt" },
-      credentialBindings: [],
-      expectedConfigDigest: "digest-instance",
-    });
-  });
-
-  it("rotates an existing credential through PATCH", async () => {
-    const api = client({
-      listProviderCredentials: jest.fn().mockResolvedValue({
-        items: [credential()],
-        page: { nextCursor: null, hasMore: false },
+      provider: provider({
+        scope: "workspace",
+        workspaceId: "workspace-1",
+        id: "instance-1",
+        configDigest: "digest-instance",
       }),
-    });
-    await saveProviderSetup({
-      api,
-      provider: provider({ scope: "workspace", workspaceId: "workspace-1", id: "instance-1" }),
-      config: {},
+      config: { defaultModel: "gpt" },
       secrets: { apiKey: "sk-rotated" },
     });
 
-    expect(api.updateProviderCredential).toHaveBeenCalledWith("credential-1", {
-      secret: "sk-rotated",
+    expect(api.createProviderInstance).not.toHaveBeenCalled();
+    expect(api.setupProviderInstance).toHaveBeenCalledTimes(1);
+    expect(api.setupProviderInstance).toHaveBeenCalledWith("instance-1", {
+      expectedConfigDigest: "digest-instance",
+      config: { defaultModel: "gpt" },
+      secrets: { apiKey: "sk-rotated" },
     });
-    expect(api.createProviderCredential).not.toHaveBeenCalled();
   });
 
-  it("does not retry after a compare-and-swap conflict", async () => {
-    const api = client({
-      updateProviderInstance: jest
-        .fn()
-        .mockRejectedValue(new Error("Provider configuration changed")),
+  it("omits blank secrets so the server preserves existing credentials", async () => {
+    const api = client();
+    await saveProviderSetup({
+      api,
+      provider: provider({
+        scope: "workspace",
+        workspaceId: "workspace-1",
+        id: "instance-1",
+        configDigest: "digest-instance",
+      }),
+      config: {},
+      secrets: { apiKey: "   " },
     });
+
+    expect(api.setupProviderInstance).toHaveBeenCalledWith("instance-1", {
+      expectedConfigDigest: "digest-instance",
+      config: {},
+    });
+  });
+
+  it("propagates a stale-digest conflict without retrying or resubmitting the secret", async () => {
+    const conflict = new Error("Provider configuration changed");
+    const api = client({ setupProviderInstance: jest.fn().mockRejectedValue(conflict) });
+
     await expect(
       saveProviderSetup({
         api,
@@ -147,7 +119,28 @@ describe("mobile provider setup", () => {
         config: {},
         secrets: { apiKey: "sk-once" },
       }),
-    ).rejects.toThrow("Provider configuration changed");
-    expect(api.updateProviderInstance).toHaveBeenCalledTimes(1);
+    ).rejects.toBe(conflict);
+    expect(api.setupProviderInstance).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns provider metadata without returning the submitted secret", async () => {
+    const config = { defaultModel: "gpt" };
+    const result = provider({
+      scope: "workspace",
+      workspaceId: "workspace-1",
+      id: "instance-1",
+    });
+    const api = client({ setupProviderInstance: jest.fn().mockResolvedValue(result) });
+
+    const saved = await saveProviderSetup({
+      api,
+      provider: result,
+      config,
+      secrets: { apiKey: "sk-never-returned" },
+    });
+
+    expect(saved).toEqual(result);
+    expect(saved).not.toHaveProperty("secrets");
+    expect(JSON.stringify(saved)).not.toContain("sk-never-returned");
   });
 });
