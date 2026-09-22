@@ -32,6 +32,7 @@ import {
   runSchema,
   sendMessageInputSchema,
   sessionSchema,
+  setupProviderInstanceInputSchema,
   shareSchema,
   updateConversationInputSchema,
   updateProviderCredentialInputSchema,
@@ -72,6 +73,7 @@ import {
   type ProviderCredential,
   type Run,
   type RunEvent,
+  type SetupProviderInstanceInput,
   type SendMessageInput,
   type Session,
   type Share,
@@ -198,6 +200,10 @@ export interface OpenMuseClient extends EventsTransport {
   listProviderInstances(input?: ListProviderInstancesInput): Promise<Page<ProviderInstance>>;
   getProviderInstance(providerInstanceId: string): Promise<ProviderInstance>;
   createProviderInstance(input: CreateProviderInstanceInput): Promise<ProviderInstance>;
+  setupProviderInstance(
+    providerInstanceId: string,
+    input: SetupProviderInstanceInput,
+  ): Promise<ProviderInstance>;
   updateProviderInstance(
     providerInstanceId: string,
     input: UpdateProviderInstanceInput,
@@ -451,6 +457,14 @@ export function createApiClient(options: ApiClientOptions): OpenMuseClient {
         "POST",
         "/api/v1/provider-instances",
         createProviderInstanceInputSchema.parse(input),
+        providerInstanceSchema,
+      );
+    },
+    async setupProviderInstance(providerInstanceId, input) {
+      return mutate(
+        "POST",
+        `/api/v1/provider-instances/${encode(providerInstanceId)}/setup`,
+        setupProviderInstanceInputSchema.parse(input),
         providerInstanceSchema,
       );
     },

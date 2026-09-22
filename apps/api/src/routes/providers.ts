@@ -7,6 +7,7 @@ import {
   listProviderCredentialsInputSchema,
   listProviderInstancesInputSchema,
   listProvidersInputSchema,
+  setupProviderInstanceInputSchema,
   updateProviderCredentialInputSchema,
   updateProviderInstanceInputSchema,
   type ProviderCredential,
@@ -172,6 +173,22 @@ function assertCredentialKind(entry: ProviderCatalogEntry, credentialKind: strin
       "invalid_request",
       400,
     );
+}
+
+function assertSetupSecretNames(
+  entry: ProviderCatalogEntry,
+  secrets: Readonly<Record<string, string>> | undefined,
+): void {
+  if (!secrets) return;
+  const declared = new Set(entry.requiredSecrets.map((secret) => secret.name));
+  for (const name of Object.keys(secrets)) {
+    if (!declared.has(name))
+      throw new ApplicationError(
+        `Provider secret ${name} is not declared by the provider`,
+        "invalid_request",
+        400,
+      );
+  }
 }
 
 function assertReadyForDefault(
@@ -635,6 +652,90 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
     }
   });
 
+  const setupInstance = async (c: ApiContext, workspaceId?: string) => {
+    const catalog = requireCatalog(options);
+    const parsed = setupProviderInstanceInputSchema.safeParse(await parseJson(c));
+    if (!parsed.success)
+      throw new ApplicationError("Invalid provider setup input", "invalid_request", 400);
+    const resolvedWorkspace = await resolveWorkspace(c, options, workspaceId);
+    const scoped = new ScopedDatabase(options.db.db, {
+      workspaceId: resolvedWorkspace,
+      actorId: c.get("identity").userId,
+    });
+    const repository = new ProviderInstanceRepository(scoped);
+    const id = routeParam(c, "providerInstanceId");
+    const current = await repository.getForMutation(id);
+    const entry = catalogEntry(catalog, current.module as ProviderModule, current.providerId);
+    if (parsed.data.config !== undefined) assertNoSecretConfigOverrides(entry, parsed.data.config);
+    assertSetupSecretNames(entry, parsed.data.secrets);
+    const secretValues = parsed.data.secrets ?? {};
+    const encryptionKey =
+      Object.keys(secretValues).length > 0 ? requireEncryptionKey(options) : undefined;
+    const actorId = c.get("identity").userId;
+    const row = await repository.setup(id, {
+      expectedConfigDigest: parsed.data.expectedConfigDigest,
+      ...(parsed.data.config === undefined ? {} : { config: parsed.data.config }),
+      ...(parsed.data.displayName === undefined ? {} : { displayName: parsed.data.displayName }),
+      secrets: secretValues,
+      declaredSecretNames: entry.requiredSecrets.map((secret) => secret.name),
+      buildConfig: (currentConfig, requestedConfig, bindings) =>
+        configWithCredentialReferences(
+          catalog,
+          entry,
+          requestedConfig === undefined ? currentConfig : { ...currentConfig, ...requestedConfig },
+          bindings,
+        ),
+      computeConfigDigest: (config, bindings) =>
+        computeConfigDigest(catalog, entry, config, bindings),
+      assertReadyForDefault: (bindings) => assertReadyForDefault(entry, bindings),
+      encryptSecret: ({
+        value,
+        workspaceId: credentialWorkspaceId,
+        providerInstanceId,
+        secretName,
+        revision,
+        createdBy,
+        userId,
+      }) => {
+        if (!encryptionKey)
+          throw new ApplicationError(
+            "Provider credential encryption is not configured",
+            "internal",
+            500,
+          );
+        return encryptCredentialEnvelope(value, encryptionKey, {
+          workspaceId: credentialWorkspaceId,
+          actorId: createdBy ?? userId ?? actorId,
+          providerInstanceId,
+          secretName,
+          revision,
+        });
+      },
+    });
+    return envelope(
+      c,
+      instanceResource(row, catalog, await repository.isDefault(row.id)),
+      c.get("requestId"),
+    );
+  };
+  app.post("/api/v1/provider-instances/:providerInstanceId/setup", async (c) => {
+    try {
+      return await setupInstance(c);
+    } catch (error) {
+      return jsonError(c, routeError(error), c.get("requestId"));
+    }
+  });
+  app.post(
+    "/api/v1/workspaces/:workspaceId/provider-instances/:providerInstanceId/setup",
+    async (c) => {
+      try {
+        return await setupInstance(c, routeParam(c, "workspaceId"));
+      } catch (error) {
+        return jsonError(c, routeError(error), c.get("requestId"));
+      }
+    },
+  );
+
   const updateInstance = async (c: ApiContext, workspaceId?: string) => {
     const catalog = requireCatalog(options);
     const parsed = updateProviderInstanceInputSchema.safeParse(await parseJson(c));
@@ -914,6 +1015,57 @@ export function registerProviderRoutes(app: Hono<ApiEnv>, options: ProviderRoute
         "conflict",
         409,
       );
+    if (current.providerInstanceId) {
+      const instanceRepository = new ProviderInstanceRepository(scoped);
+      const instance = await instanceRepository.getForMutation(current.providerInstanceId);
+      const entry = catalogEntry(
+        requireCatalog(options),
+        instance.module as ProviderModule,
+        instance.providerId,
+      );
+      const isBound = instance.credentialBindings.some(
+        (binding) => binding.credentialId === credentialId,
+      );
+      if (isBound) {
+        assertCredentialKind(entry, current.credentialKind);
+        const key = requireEncryptionKey(options);
+        await instanceRepository.setup(current.providerInstanceId, {
+          expectedConfigDigest: instance.configDigest,
+          secrets: { [current.credentialKind]: parsed.data.secret },
+          declaredSecretNames: entry.requiredSecrets.map((secret) => secret.name),
+          buildConfig: (currentConfig, requestedConfig, bindings) =>
+            configWithCredentialReferences(
+              requireCatalog(options),
+              entry,
+              requestedConfig === undefined
+                ? currentConfig
+                : { ...currentConfig, ...requestedConfig },
+              bindings,
+            ),
+          computeConfigDigest: (config, bindings) =>
+            computeConfigDigest(requireCatalog(options), entry, config, bindings),
+          assertReadyForDefault: (bindings) => assertReadyForDefault(entry, bindings),
+          encryptSecret: ({
+            value,
+            workspaceId: credentialWorkspaceId,
+            providerInstanceId,
+            secretName,
+            revision,
+            createdBy,
+            userId,
+          }) =>
+            encryptCredentialEnvelope(value, key, {
+              workspaceId: credentialWorkspaceId,
+              actorId: createdBy ?? userId ?? c.get("identity").userId,
+              providerInstanceId,
+              secretName,
+              revision,
+            }),
+        });
+        const rotated = await repository.get(credentialId);
+        return envelope(c, credentialResource(rotated), c.get("requestId"));
+      }
+    }
     const key = requireEncryptionKey(options);
     const encryptedValue = encryptCredentialEnvelope(parsed.data.secret, key, {
       workspaceId: current.workspaceId,

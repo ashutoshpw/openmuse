@@ -193,6 +193,28 @@ export const updateProviderInstanceInputSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
+/**
+ * Atomically apply provider configuration and write-only secret values. Secret
+ * names are checked against the selected provider catalogue by the API; the
+ * transport schema deliberately does not maintain a second provider registry.
+ */
+export const setupProviderInstanceInputSchema = z
+  .object({
+    expectedConfigDigest: digestSchema,
+    config: jsonObjectSchema.optional(),
+    displayName: safeNameSchema.max(128).optional(),
+    secrets: z
+      .record(
+        safeNameSchema.max(128),
+        z
+          .string()
+          .min(1)
+          .max(64 * 1024),
+      )
+      .optional(),
+  })
+  .strict();
+
 export const listProviderInstancesInputSchema = paginationSchema
   .extend({
     module: providerModuleSchema.optional(),
@@ -343,6 +365,7 @@ export type ChangeGoalStatusInput = z.input<typeof changeGoalStatusInputSchema>;
 export type ListProvidersInput = z.input<typeof listProvidersInputSchema>;
 export type CreateProviderInstanceInput = z.input<typeof createProviderInstanceInputSchema>;
 export type UpdateProviderInstanceInput = z.input<typeof updateProviderInstanceInputSchema>;
+export type SetupProviderInstanceInput = z.input<typeof setupProviderInstanceInputSchema>;
 export type ListProviderInstancesInput = z.input<typeof listProviderInstancesInputSchema>;
 export type CreateProviderCredentialInput = z.input<typeof createProviderCredentialInputSchema>;
 export type UpdateProviderCredentialInput = z.input<typeof updateProviderCredentialInputSchema>;

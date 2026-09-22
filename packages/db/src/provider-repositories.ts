@@ -33,6 +33,34 @@ export interface ProviderCredentialMutationMetadata {
   updatedAt: Date;
 }
 
+export interface ProviderInstanceSetupInput {
+  expectedConfigDigest: string;
+  config?: Record<string, unknown>;
+  displayName?: string;
+  secrets: Readonly<Record<string, string>>;
+  declaredSecretNames: readonly string[];
+  buildConfig: (
+    currentConfig: Record<string, unknown>,
+    requestedConfig: Record<string, unknown> | undefined,
+    bindings: readonly ProviderBinding[],
+  ) => Record<string, unknown>;
+  computeConfigDigest: (
+    config: Record<string, unknown>,
+    bindings: readonly ProviderBinding[],
+  ) => string;
+  assertReadyForDefault?: (bindings: readonly ProviderBinding[]) => void;
+  encryptSecret: (input: {
+    value: string;
+    workspaceId: string;
+    actorId: string;
+    providerInstanceId: string;
+    secretName: string;
+    revision: number;
+    createdBy: string | null;
+    userId: string | null;
+  }) => string;
+}
+
 function notFound(resource: string): never {
   throw new RepositoryError(`${resource} was not found`, "not_found");
 }
@@ -169,7 +197,7 @@ export class ProviderInstanceRepository {
     },
   ) {
     return this.scoped.run(async (tx) => {
-      const current = await this.getReadable(tx, id);
+      const current = await this.getForUpdate(tx, id);
       const canAdmin = await this.canAdmin(tx);
       requireActorOwnerOrAdmin(current, this.scope.actorId, canAdmin);
       if (input.expectedConfigDigest && input.expectedConfigDigest !== current.configDigest)
@@ -217,6 +245,196 @@ export class ProviderInstanceRepository {
         const scope: ProviderInstanceScope = row.userId === null ? "workspace" : "user";
         await this.clearDefaultInTransaction(tx, id, scope);
       }
+      return row;
+    });
+  }
+
+  /**
+   * Apply provider configuration and write-only secret values as one
+   * compare-and-swap transaction. The instance row is locked before any
+   * credential rows; every validation, encryption, and digest calculation is
+   * completed before the first write so failures leave no partial setup.
+   */
+  async setup(id: string, input: ProviderInstanceSetupInput) {
+    const declaredNames = new Set(input.declaredSecretNames);
+    for (const name of Object.keys(input.secrets)) {
+      if (!declaredNames.has(name))
+        invalid(`Provider secret ${name} is not declared by the provider`);
+    }
+
+    return this.scoped.run(async (tx) => {
+      const current = await this.getForUpdate(tx, id);
+      const canAdmin = await this.canAdmin(tx);
+      requireActorOwnerOrAdmin(current, this.scope.actorId, canAdmin);
+      if (current.configDigest !== input.expectedConfigDigest)
+        throw new RepositoryError("Provider configuration changed concurrently", "conflict");
+
+      const credentialOwner =
+        current.userId === null
+          ? isNull(providerCredentials.userId)
+          : eq(providerCredentials.userId, current.userId);
+      const credentials = await tx
+        .select()
+        .from(providerCredentials)
+        .where(
+          and(
+            eq(providerCredentials.workspaceId, this.scope.workspaceId),
+            eq(providerCredentials.providerInstanceId, id),
+            eq(providerCredentials.provider, current.providerId),
+            credentialOwner,
+          ),
+        )
+        .for("update");
+      const credentialById = new Map(credentials.map((credential) => [credential.id, credential]));
+      const credentialByKind = new Map(
+        credentials.map((credential) => [credential.credentialKind, credential]),
+      );
+      const bindings = current.credentialBindings.map((binding) => ({ ...binding }));
+      const bindingNames = new Set<string>();
+      const bindingIds = new Set<string>();
+      for (const binding of bindings) {
+        if (!declaredNames.has(binding.name))
+          invalid(`Provider secret ${binding.name} is not declared by the provider`);
+        if (bindingNames.has(binding.name) || bindingIds.has(binding.credentialId))
+          invalid("Provider credential bindings must be unique");
+        bindingNames.add(binding.name);
+        bindingIds.add(binding.credentialId);
+        if (!credentialById.has(binding.credentialId))
+          throw new RepositoryError("Provider credential binding is stale", "conflict");
+      }
+
+      type CredentialPlan = {
+        id: string;
+        name: string;
+        previousRevision: number | null;
+        revision: number;
+        encryptedValue: string;
+        isNew: boolean;
+      };
+      const plans: CredentialPlan[] = [];
+      for (const [name, value] of Object.entries(input.secrets)) {
+        const currentBinding = bindings.find((binding) => binding.name === name);
+        const existing = currentBinding
+          ? credentialById.get(currentBinding.credentialId)
+          : credentialByKind.get(name);
+        if (existing && existing.credentialKind !== name)
+          invalid("Provider credential bindings do not match their credential kinds");
+        const idForSecret = existing?.id ?? randomUUID();
+        const revision = (existing?.secretRevision ?? 0) + 1;
+        const encryptedValue = input.encryptSecret({
+          value,
+          workspaceId: this.scope.workspaceId,
+          actorId: this.scope.actorId,
+          providerInstanceId: id,
+          secretName: name,
+          revision,
+          createdBy: existing?.createdBy ?? this.scope.actorId,
+          userId: existing?.userId ?? current.userId,
+        });
+        plans.push({
+          id: idForSecret,
+          name,
+          previousRevision: existing?.secretRevision ?? null,
+          revision,
+          encryptedValue,
+          isNew: existing === undefined,
+        });
+        const nextBinding = { name, credentialId: idForSecret, revision };
+        const bindingIndex = bindings.findIndex((binding) => binding.name === name);
+        if (bindingIndex === -1) bindings.push(nextBinding);
+        else bindings[bindingIndex] = nextBinding;
+      }
+
+      const config = input.buildConfig(current.config, input.config, bindings);
+      const configDigest = input.computeConfigDigest(config, bindings);
+      const [defaultRow] = await tx
+        .select({ id: providerInstanceDefaults.id })
+        .from(providerInstanceDefaults)
+        .where(
+          and(
+            eq(providerInstanceDefaults.providerInstanceId, id),
+            eq(providerInstanceDefaults.workspaceId, this.scope.workspaceId),
+            current.userId === null
+              ? isNull(providerInstanceDefaults.userId)
+              : eq(providerInstanceDefaults.userId, current.userId),
+          ),
+        )
+        .limit(1);
+      if (defaultRow) {
+        for (const binding of bindings) {
+          const credential = credentialById.get(binding.credentialId);
+          const plan = plans.find((item) => item.id === binding.credentialId);
+          const active = plan ? true : credential?.status === "active";
+          const revision = plan?.revision ?? credential?.secretRevision;
+          if ((!plan && !credential) || !active || revision !== binding.revision)
+            throw new RepositoryError(
+              "Provider credentials must be configured before selecting a default provider",
+              "conflict",
+            );
+        }
+        input.assertReadyForDefault?.(bindings);
+      }
+
+      // All checks above, including encryption and final digest derivation,
+      // happen before mutating either table.
+      for (const plan of plans) {
+        if (plan.isNew) {
+          await tx.insert(providerCredentials).values({
+            id: plan.id,
+            workspaceId: this.scope.workspaceId,
+            providerInstanceId: id,
+            userId: current.userId,
+            createdBy: this.scope.actorId,
+            provider: current.providerId,
+            credentialKind: plan.name,
+            encryptedValue: plan.encryptedValue,
+            keyVersion: 1,
+            secretRevision: plan.revision,
+            status: "active",
+          });
+        } else {
+          const [updated] = await tx
+            .update(providerCredentials)
+            .set({
+              encryptedValue: plan.encryptedValue,
+              secretRevision: plan.revision,
+              status: "active",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(providerCredentials.id, plan.id),
+                eq(providerCredentials.workspaceId, this.scope.workspaceId),
+                plan.previousRevision === null
+                  ? sql`false`
+                  : eq(providerCredentials.secretRevision, plan.previousRevision),
+              ),
+            )
+            .returning({ id: providerCredentials.id });
+          if (!updated)
+            throw new RepositoryError("Provider credential was changed concurrently", "conflict");
+        }
+      }
+
+      const [row] = await tx
+        .update(providerInstances)
+        .set({
+          ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
+          config,
+          credentialBindings: bindings,
+          configDigest,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(providerInstances.id, id),
+            eq(providerInstances.workspaceId, this.scope.workspaceId),
+            eq(providerInstances.configDigest, input.expectedConfigDigest),
+          ),
+        )
+        .returning();
+      if (!row)
+        throw new RepositoryError("Provider configuration changed concurrently", "conflict");
       return row;
     });
   }
@@ -311,6 +529,22 @@ export class ProviderInstanceRepository {
           or(isNull(providerInstances.userId), eq(providerInstances.userId, this.scope.actorId)),
         ),
       )
+      .limit(1);
+    return row ?? notFound("Provider instance");
+  }
+
+  private async getForUpdate(tx: DbTransaction, id: string) {
+    const [row] = await tx
+      .select()
+      .from(providerInstances)
+      .where(
+        and(
+          eq(providerInstances.id, id),
+          eq(providerInstances.workspaceId, this.scope.workspaceId),
+          or(isNull(providerInstances.userId), eq(providerInstances.userId, this.scope.actorId)),
+        ),
+      )
+      .for("update")
       .limit(1);
     return row ?? notFound("Provider instance");
   }
@@ -525,7 +759,16 @@ export class ProviderCredentialRepository {
       const canAdmin = await this.canAdmin(tx);
       if (current.userId === null ? !canAdmin : current.userId !== this.scope.actorId)
         forbidden("Provider credential administration is required");
-      await lockCredentialInstance(tx, this.scope.workspaceId, current.providerInstanceId);
+      const instance = await lockCredentialInstance(
+        tx,
+        this.scope.workspaceId,
+        current.providerInstanceId,
+      );
+      if (instance?.credentialBindings.some((binding) => binding.credentialId === id))
+        throw new RepositoryError(
+          "Bound provider credentials must be rotated through provider instance setup",
+          "conflict",
+        );
       const [updated] = await tx
         .update(providerCredentials)
         .set({
@@ -583,6 +826,7 @@ export class ProviderCredentialRepository {
           or(isNull(providerInstances.userId), eq(providerInstances.userId, this.scope.actorId)),
         ),
       )
+      .for("update")
       .limit(1);
     if (!instance) notFound("Provider instance");
     const canAdmin = await this.canAdmin(tx);
@@ -655,7 +899,9 @@ async function assertCredentialBindingsInTransaction(
 ): Promise<void> {
   if (input.bindings.length === 0) return;
   const ids = input.bindings.map((binding) => binding.credentialId);
-  if (new Set(ids).size !== ids.length) invalid("Provider credential names must be unique");
+  const names = input.bindings.map((binding) => binding.name);
+  if (new Set(ids).size !== ids.length || new Set(names).size !== names.length)
+    invalid("Provider credential names must be unique");
   const rows = await tx
     .select()
     .from(providerCredentials)
@@ -664,25 +910,23 @@ async function assertCredentialBindingsInTransaction(
         eq(providerCredentials.workspaceId, input.workspaceId),
         eq(providerCredentials.providerInstanceId, input.providerInstanceId),
         eq(providerCredentials.provider, input.providerId),
-        eq(providerCredentials.status, "active"),
         or(isNull(providerCredentials.userId), eq(providerCredentials.userId, input.actorId)),
         inArray(providerCredentials.id, ids),
       ),
     )
     .for("update");
-  if (
-    rows.length !== input.bindings.length ||
-    input.bindings.some(
-      (binding) =>
-        !rows.some(
-          (row) =>
-            row.id === binding.credentialId &&
-            row.secretRevision === binding.revision &&
-            row.credentialKind === binding.name,
-        ),
-    )
-  )
+  if (rows.length !== input.bindings.length)
     invalid("Provider credential bindings do not match their credential kinds");
+  for (const binding of input.bindings) {
+    const row = rows.find((candidate) => candidate.id === binding.credentialId);
+    if (!row || row.credentialKind !== binding.name)
+      invalid("Provider credential bindings do not match their credential kinds");
+    if (row.status !== "active" || row.secretRevision !== binding.revision)
+      throw new RepositoryError(
+        "Provider credential changed while the provider was being configured",
+        "conflict",
+      );
+  }
 }
 
 /**
@@ -696,9 +940,9 @@ async function lockCredentialInstance(
   workspaceId: string,
   providerInstanceId: string | null,
 ) {
-  if (!providerInstanceId) return;
-  await tx
-    .select({ id: providerInstances.id })
+  if (!providerInstanceId) return undefined;
+  const [instance] = await tx
+    .select()
     .from(providerInstances)
     .where(
       and(
@@ -708,4 +952,5 @@ async function lockCredentialInstance(
     )
     .for("update")
     .limit(1);
+  return instance;
 }
