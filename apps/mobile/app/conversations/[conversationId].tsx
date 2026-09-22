@@ -81,11 +81,12 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [voiceMode, setVoiceMode] = useState<"live" | "recorded">("live");
+  const workspaceId = workspace?.id;
+  const attachmentIdSet = useMemo(() => new Set(attachmentIds), [attachmentIds]);
 
   useEffect(() => {
     let active = true;
     if (!apiPromise) {
-      setApi(null);
       return () => {
         active = false;
       };
@@ -108,7 +109,7 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
       const client = await apiPromise;
       const [nextAttachments, nextArtifacts] = await Promise.all([
         client.listAttachments(conversationId),
-        client.listArtifacts(conversationId, workspace?.id),
+        client.listArtifacts(conversationId, workspaceId),
       ]);
       setAttachments(nextAttachments.items);
       setArtifacts(nextArtifacts.items);
@@ -117,14 +118,15 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
         cause instanceof Error ? cause.message : "Unable to load attachments and artifacts.",
       );
     }
-  }, [apiPromise, conversationId, workspace?.id]);
+  }, [apiPromise, conversationId, workspaceId]);
 
   useEffect(() => {
-    void loadResources();
+    void Promise.resolve().then(() => loadResources());
   }, [loadResources]);
 
-  const liveVoice = useLiveVoice({ api, workspaceId: workspace?.id, conversationId });
-  const recordedVoice = useRecordedVoice({ api, workspaceId: workspace?.id, conversationId });
+  const activeApi = apiPromise ? api : null;
+  const liveVoice = useLiveVoice({ api: activeApi, workspaceId, conversationId });
+  const recordedVoice = useRecordedVoice({ api: activeApi, workspaceId, conversationId });
   const activeVoice = voiceMode === "live" ? liveVoice : recordedVoice;
 
   const upload = async () => {
@@ -196,7 +198,7 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
         <ErrorBanner message={resourceError} onDismiss={() => setResourceError(null)} />
       ) : null}
       {!loading ? <ChatTranscript parts={parts} style={styles.transcript} /> : null}
-      <AttachmentRow attachments={attachments.filter((item) => attachmentIds.includes(item.id))} />
+      <AttachmentRow attachments={attachments.filter((item) => attachmentIdSet.has(item.id))} />
       <NativeRow alignment="center" spacing={spacing.sm}>
         <NativeText variant="caption" color={theme.mutedInk}>
           {voiceDetail}

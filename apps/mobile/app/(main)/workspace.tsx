@@ -69,10 +69,10 @@ function WorkspaceContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
-    setLoading(true);
-    setError(null);
     try {
       const api = await apiPromise;
+      setLoading(true);
+      setError(null);
       const result = await api.listConversations(workspace.id);
       setConversations(result.items);
     } catch (cause: unknown) {
@@ -83,7 +83,7 @@ function WorkspaceContent() {
   }, [apiPromise, workspace]);
 
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
 
   const createConversation = async () => {

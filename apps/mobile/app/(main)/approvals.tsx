@@ -78,14 +78,12 @@ function ApprovalsContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
-    setLoading(true);
-    setError(null);
     try {
-      setApprovals(
-        (await (await apiPromise).listApprovals(workspace.id)).items.filter(
-          (item) => item.status === "pending",
-        ),
-      );
+      const api = await apiPromise;
+      setLoading(true);
+      setError(null);
+      const result = await api.listApprovals(workspace.id);
+      setApprovals(result.items.filter((item) => item.status === "pending"));
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "Unable to load approvals.");
     } finally {
@@ -94,7 +92,7 @@ function ApprovalsContent() {
   }, [apiPromise, workspace]);
 
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
 
   return (

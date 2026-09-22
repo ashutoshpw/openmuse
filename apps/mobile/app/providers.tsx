@@ -78,10 +78,10 @@ function ProvidersContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
-    setLoading(true);
-    setError(null);
     try {
       const api = await apiPromise;
+      setLoading(true);
+      setError(null);
       const [available, connected] = await Promise.all([
         api.listProviders(workspace.id),
         api.listConnections(workspace.id),
@@ -96,7 +96,7 @@ function ProvidersContent() {
   }, [apiPromise, workspace]);
 
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
 
   const connectApp = async (app: "gmail" | "calendar") => {

@@ -5,9 +5,7 @@ import { useAuthenticatedApi } from "../../data/useAuthenticatedApi";
 function mergePart(parts: ChatPart[], next: ChatPart) {
   const index = parts.findIndex((part) => part.id === next.id);
   if (index === -1) return [...parts, next];
-  const copy = parts.slice();
-  copy[index] = { ...copy[index], ...next };
-  return copy;
+  return parts.map((part, partIndex) => (partIndex === index ? { ...part, ...next } : part));
 }
 
 export function useConversation(conversationId: string) {
@@ -32,16 +30,19 @@ export function useConversation(conversationId: string) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void refresh()
-      .catch((cause: unknown) => {
-        if (!cancelled)
-          setError(cause instanceof Error ? cause.message : "Unable to load this conversation.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+      void refresh()
+        .catch((cause: unknown) => {
+          if (!cancelled)
+            setError(cause instanceof Error ? cause.message : "Unable to load this conversation.");
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    });
     return () => {
       cancelled = true;
     };

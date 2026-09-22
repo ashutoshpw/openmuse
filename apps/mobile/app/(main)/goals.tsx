@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet } from "react-native";
 import {
   NativeBadge,
@@ -60,16 +60,17 @@ function GoalsContent() {
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
-  const [detail, setDetail] = useState("");
-  const [schedule, setSchedule] = useState("");
+  const detailRef = useRef("");
+  const scheduleRef = useRef("");
   const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
-    setLoading(true);
-    setError(null);
     try {
-      const result = await (await apiPromise).listGoals(workspace.id);
+      const api = await apiPromise;
+      setLoading(true);
+      setError(null);
+      const result = await api.listGoals(workspace.id);
       setGoals(result.items);
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "Unable to load goals.");
@@ -79,7 +80,7 @@ function GoalsContent() {
   }, [apiPromise, workspace]);
 
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
 
   const create = async () => {
@@ -91,12 +92,12 @@ function GoalsContent() {
         await apiPromise
       ).createGoal(workspace.id, {
         title: title.trim(),
-        detail: detail.trim() || undefined,
-        schedule: schedule.trim() || undefined,
+        detail: detailRef.current.trim() || undefined,
+        schedule: scheduleRef.current.trim() || undefined,
       });
       setTitle("");
-      setDetail("");
-      setSchedule("");
+      detailRef.current = "";
+      scheduleRef.current = "";
       setShowCreate(false);
       await refresh();
     } catch (cause: unknown) {
@@ -152,13 +153,17 @@ function GoalsContent() {
           placeholder="What should OpenMuse know?"
           multiline
           numberOfLines={3}
-          onChangeText={setDetail}
+          onChangeText={(value) => {
+            detailRef.current = value;
+          }}
         />
         <FieldLabel
           label="Schedule"
           detail="Use the server’s schedule syntax."
           placeholder="e.g. weekly"
-          onChangeText={setSchedule}
+          onChangeText={(value) => {
+            scheduleRef.current = value;
+          }}
           autoCapitalize="none"
         />
         <NativeButton

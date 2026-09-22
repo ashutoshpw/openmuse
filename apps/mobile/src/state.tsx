@@ -31,31 +31,32 @@ export function ApiProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    if (!appConfig.apiUrl) {
-      setApi(null);
-      setLoading(false);
-      setError("Set EXPO_PUBLIC_OPENMUSE_API_URL to connect this app to an OpenMuse server.");
-      return () => {
-        cancelled = true;
-      };
-    }
-    void import("./data/api")
-      .then(({ OpenMuseApi }) => OpenMuseApi.create({ baseUrl: appConfig.apiUrl }))
-      .then((nextApi) => {
-        if (!cancelled) setApi(nextApi);
-      })
-      .catch((cause: unknown) => {
-        if (cancelled) return;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+      if (!appConfig.apiUrl) {
         setApi(null);
-        setError(
-          cause instanceof Error ? cause.message : "Unable to initialize the OpenMuse client.",
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+        setLoading(false);
+        setError("Set EXPO_PUBLIC_OPENMUSE_API_URL to connect this app to an OpenMuse server.");
+        return;
+      }
+      void import("./data/api")
+        .then(({ OpenMuseApi }) => OpenMuseApi.create({ baseUrl: appConfig.apiUrl }))
+        .then((nextApi) => {
+          if (!cancelled) setApi(nextApi);
+        })
+        .catch((cause: unknown) => {
+          if (cancelled) return;
+          setApi(null);
+          setError(
+            cause instanceof Error ? cause.message : "Unable to initialize the OpenMuse client.",
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    });
     return () => {
       cancelled = true;
     };
@@ -128,7 +129,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         cancelled = true;
       };
     if (!baseApi.api) {
-      setLoading(false);
+      void Promise.resolve().then(() => {
+        if (!cancelled) setLoading(false);
+      });
       return () => {
         cancelled = true;
       };
@@ -243,19 +246,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!session || !baseApi.api) return null;
     return baseApi.api.withToken(session.token);
   }, [baseApi.api, session]);
+  const sessionWorkspaceId = session?.workspaceId;
 
   const refresh = useCallback(async () => {
     if (!authenticatedApi) return;
-    setLoading(true);
-    setError(null);
     try {
       const api = await authenticatedApi;
+      setLoading(true);
+      setError(null);
       const result = await api.listWorkspaces();
       setWorkspaces(result.items);
       setWorkspace((current) => {
         if (current && result.items.some((item) => item.id === current.id)) return current;
-        const preferred = session?.workspaceId
-          ? result.items.find((item) => item.id === session.workspaceId)
+        const preferred = sessionWorkspaceId
+          ? result.items.find((item) => item.id === sessionWorkspaceId)
           : undefined;
         return preferred ?? result.items[0] ?? null;
       });
@@ -264,15 +268,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [authenticatedApi, session?.workspaceId]);
+  }, [authenticatedApi, sessionWorkspaceId]);
 
   useEffect(() => {
-    if (!session) {
-      setWorkspaces([]);
-      setWorkspace(null);
-      return;
-    }
-    void refresh();
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      if (!session) {
+        setWorkspaces([]);
+        setWorkspace(null);
+        return;
+      }
+      void refresh();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refresh, session]);
 
   const selectWorkspace = useCallback((next: Workspace) => setWorkspace(next), []);

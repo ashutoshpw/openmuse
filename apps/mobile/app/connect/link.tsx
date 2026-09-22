@@ -24,22 +24,32 @@ function CallbackContent() {
     error?: string | string[];
   }>();
   const apiPromise = useAuthenticatedApi();
+  const callbackCode = firstParam(params.code);
+  const callbackState = firstParam(params.state);
+  const callbackError = firstParam(params.error);
+  const hasCallback = Boolean(callbackCode || callbackState);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     let active = true;
-    const callbackError = firstParam(params.error);
     if (callbackError) {
-      setError(callbackError);
-      setLoading(false);
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setError(callbackError);
+        setLoading(false);
+      });
       return () => {
         active = false;
       };
     }
-    if (!apiPromise || (!firstParam(params.code) && !firstParam(params.state))) {
-      setLoading(false);
-      setMessage("Open this route after the provider redirects back to OpenMuse.");
+    if (!apiPromise || !hasCallback) {
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setLoading(false);
+        setMessage("Open this route after the provider redirects back to OpenMuse.");
+      });
       return () => {
         active = false;
       };
@@ -47,8 +57,8 @@ function CallbackContent() {
     void apiPromise
       .then((api) =>
         api.handleAppConnectCallback({
-          code: firstParam(params.code),
-          state: firstParam(params.state),
+          code: callbackCode,
+          state: callbackState,
         }),
       )
       .then(() => {
@@ -71,7 +81,7 @@ function CallbackContent() {
     return () => {
       active = false;
     };
-  }, [apiPromise, params.code, params.error, params.state]);
+  }, [apiPromise, callbackCode, callbackError, callbackState, hasCallback]);
 
   return (
     <Screen>

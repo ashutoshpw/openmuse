@@ -75,12 +75,12 @@ function MemoryContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
-    setLoading(true);
-    setError(null);
     try {
-      setMemories(
-        (await (await apiPromise).listMemories(workspace.id)).items.filter((item) => item.enabled),
-      );
+      const api = await apiPromise;
+      setLoading(true);
+      setError(null);
+      const result = await api.listMemories(workspace.id);
+      setMemories(result.items.filter((item) => item.enabled));
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "Unable to load workspace memory.");
     } finally {
@@ -89,7 +89,7 @@ function MemoryContent() {
   }, [apiPromise, workspace]);
 
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
 
   const create = async () => {

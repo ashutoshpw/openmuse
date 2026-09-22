@@ -15,6 +15,10 @@ import {
 } from "react-native-webrtc";
 import type { OpenMuseApi } from "../../data/api";
 
+function createPeerConnection() {
+  return new RTCPeerConnection({ iceServers: [] });
+}
+
 export type VoiceState =
   | "idle"
   | "requesting-permission"
@@ -60,7 +64,7 @@ export function useLiveVoice({ api, workspaceId, conversationId }: VoiceOptions)
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
-      const peer = new RTCPeerConnection({ iceServers: [] });
+      const peer = createPeerConnection();
       peerRef.current = peer;
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       const offer = await peer.createOffer({});
@@ -157,7 +161,7 @@ export function useRecordedVoice({ api, workspaceId, conversationId }: VoiceOpti
       setState("error");
       setError(cause instanceof Error ? cause.message : "Unable to upload the recording.");
     }
-  }, [api, conversationId, recorder, recorderState.isRecording, recorder.uri, workspaceId]);
+  }, [api, conversationId, recorder, recorderState.isRecording, workspaceId]);
 
   return {
     state,

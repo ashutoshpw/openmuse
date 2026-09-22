@@ -89,10 +89,10 @@ function SharingContent() {
 
   const refresh = useCallback(async () => {
     if (!apiPromise || !workspace) return;
-    setLoading(true);
-    setError(null);
     try {
       const api = await apiPromise;
+      setLoading(true);
+      setError(null);
       const [nextShares, nextConversations, nextArtifacts] = await Promise.all([
         api.listShares(workspace.id),
         api.listConversations(workspace.id),
@@ -111,7 +111,7 @@ function SharingContent() {
   }, [apiPromise, workspace]);
 
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
 
   const create = async () => {
