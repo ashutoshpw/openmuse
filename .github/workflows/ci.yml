@@ -67,7 +67,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run native Jest suite
         run: bun run test:native
-      - name: Export Expo iOS Hermes bundle
+      - name: Export Expo iOS and Android Hermes bundles
         run: bun run build:native
 
   postgres:
