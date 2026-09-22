@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "OpenMuse",
+    "slug": "openmuse",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "openmuse",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "jsEngine": "hermes",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "OpenMuse uses the microphone for live voice conversations.",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": true
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.openmuse.mobile",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "OpenMuse uses the microphone for live voice conversations.",
+        "NSCameraUsageDescription": "OpenMuse uses the camera when a connected workflow needs it."
+      }
+    },
+    "android": {
+      "package": "ai.openmuse.mobile",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.BLUETOOTH_CONNECT"
+      ],
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiUrl": "${EXPO_PUBLIC_OPENMUSE_API_URL}"
+    }
+  }
+}

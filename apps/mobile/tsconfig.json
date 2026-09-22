@@ -1,0 +1,17 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "@openmuse/client": ["../../packages/client/src/index.ts"],
+      "@openmuse/contracts": ["../../packages/contracts/src/index.ts"],
+      "@openmuse/design-tokens": ["../../packages/design-tokens/src/index.ts"],
+      "@openmuse/ui-native": ["../../packages/ui-native/src/index.tsx"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+}
