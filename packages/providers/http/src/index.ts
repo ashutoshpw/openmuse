@@ -339,7 +339,8 @@ async function readResponseBytes(
                 reject(timeoutError());
               }, remaining);
             });
-      let result: ReadableStreamReadResult<Uint8Array<ArrayBufferLike>>;
+      type ReadResult = Awaited<typeof read>;
+      let result: ReadResult;
       try {
         if (abortPromise === undefined && timeoutPromise === undefined) result = await read;
         else if (timeoutPromise === undefined) result = await Promise.race([read, abortPromise!]);
