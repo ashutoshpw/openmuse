@@ -582,6 +582,13 @@ export function createDaytonaSandboxDriver(
             "The sandbox could not be inspected.",
           );
         }
+        if (refreshed.kind === "aborted" && context.signal.aborted)
+          throw providerError(
+            providerId,
+            operation,
+            "cancelled",
+            "The sandbox inspection was cancelled.",
+          );
         if (refreshed.kind !== "value")
           throw providerError(
             providerId,
@@ -632,6 +639,13 @@ export function createDaytonaSandboxDriver(
         let sandbox: DaytonaSandbox;
         try {
           const outcome = await raceSdk(sdk.get(id), context.signal, controlTimeoutSeconds);
+          if (outcome.kind === "aborted" && context.signal.aborted)
+            throw providerError(
+              providerId,
+              "reconnect",
+              "cancelled",
+              "The sandbox lookup was cancelled.",
+            );
           if (outcome.kind !== "value")
             throw providerError(
               providerId,
@@ -742,8 +756,7 @@ export function createDaytonaSandboxDriver(
                   "The sandbox creation cleanup outcome is unknown.",
                 );
             }
-            if (cause instanceof ProviderOperationError && cause.code === "unknown_outcome")
-              throw cause;
+            if (cause instanceof ProviderOperationError) throw cause;
             if (context.signal.aborted)
               throw providerError(
                 providerId,
