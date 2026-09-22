@@ -188,6 +188,7 @@
       "name": "@openmuse/db",
       "version": "0.1.0",
       "dependencies": {
+        "@openmuse/contracts": "workspace:*",
         "drizzle-orm": "catalog:",
         "postgres": "catalog:",
       },

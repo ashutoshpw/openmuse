@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@openmuse/contracts": "workspace:*",
     "drizzle-orm": "catalog:",
     "postgres": "catalog:"
   },

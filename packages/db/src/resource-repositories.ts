@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { goalConfigSchema, type GoalConfig } from "@openmuse/contracts";
 import type { DbTransaction, ScopedDatabase } from "./context.js";
 import {
   artifacts,
@@ -26,10 +27,12 @@ function invalid(message: string): never {
   throw new RepositoryError(message, "invalid");
 }
 
-function requireOwner<T extends { createdBy: string }>(row: T | undefined, actorId: string): T {
+function requireOwner<T extends { createdBy: string }>(
+  row: T | undefined,
+  actorId: string,
+): asserts row is T {
   if (!row) notFound("Resource");
   if (row.createdBy !== actorId) forbidden("Only the creator can modify this resource");
-  return row;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -41,29 +44,16 @@ function asRecord(value: unknown): Record<string, unknown> {
 export interface GoalData {
   title: string;
   instructions: string;
-  schedule:
-    | {
-        kind: "once";
-        at: string;
-      }
-    | {
-        kind: "interval";
-        everySeconds: number;
-        timezone: string;
-      }
-    | {
-        kind: "cron";
-        expression: string;
-        timezone: string;
-      }
-    | null;
+  schedule: GoalConfig["schedule"];
   connectionIds: string[];
   memoryIds: string[];
   approvalPolicyVersion: string;
 }
 
 function goalData(row: typeof goals.$inferSelect): GoalData {
-  const config = row.config;
+  const parsed = goalConfigSchema.safeParse(row.config);
+  if (!parsed.success) invalid("Stored goal configuration is invalid");
+  const config = parsed.data;
   return {
     title: row.title,
     instructions: row.description ?? "",
@@ -81,6 +71,12 @@ function withGoalData(data: GoalData): typeof goals.$inferInsert.config {
     memoryIds: data.memoryIds,
     approvalPolicyVersion: data.approvalPolicyVersion,
   };
+}
+
+function validatedGoalConfig(data: GoalData): typeof goals.$inferInsert.config {
+  const parsed = goalConfigSchema.safeParse(withGoalData(data));
+  if (!parsed.success) invalid("Goal configuration is invalid");
+  return parsed.data;
 }
 
 export class GoalRepository {
@@ -142,7 +138,7 @@ export class GoalRepository {
           description: input.data.instructions,
           status: input.status ?? "draft",
           revision: 1,
-          config: withGoalData(input.data),
+          config: validatedGoalConfig(input.data),
           nextRunAt: null,
         })
         .returning();
@@ -182,7 +178,7 @@ export class GoalRepository {
           title: nextData.title,
           description: nextData.instructions,
           revision: currentRevision + 1,
-          config: withGoalData(nextData),
+          config: validatedGoalConfig(nextData),
           nextRunAt: null,
           updatedAt: new Date(),
         })
@@ -217,6 +213,7 @@ export class GoalRepository {
       const currentRevision = current.revision;
       if (currentRevision !== expectedRevision)
         throw new RepositoryError("Goal was changed concurrently", "conflict");
+      goalData(current);
       const [updated] = await tx
         .update(goals)
         .set({

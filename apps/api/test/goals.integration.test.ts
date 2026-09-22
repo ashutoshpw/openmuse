@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { createOpenMuseAuth } from "@openmuse/auth";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { createApi } from "../src/app.js";
@@ -9,6 +11,9 @@ import {
 const integration = Boolean(process.env.TEST_DATABASE_URL);
 const origin = "http://localhost:5173";
 const authSecret = "openmuse-goals-integration-secret-2026-contains-32-bytes";
+const goalCrudMigration = fileURLToPath(
+  new URL("../../../packages/db/migrations/0011_goal_crud_safety.sql", import.meta.url),
+);
 
 type Envelope<T = unknown> = {
   data?: T;
@@ -261,6 +266,57 @@ describe.skipIf(!integration)("OpenMuse goal CRUD PostgreSQL integration", () =>
     expect(duplicateReference.body.error?.code).toBe("invalid_request");
   });
 
+  it("fails closed when persisted goal configuration is corrupted", async () => {
+    const corruptGoalId = `goal-corrupt-${harness.databaseName}`;
+    await harness.owner.sql`
+      insert into goals
+        (id, workspace_id, created_by, title, description, revision, config, status, progress)
+      values
+        (${corruptGoalId}, ${harness.ids.workspace}, ${harness.ids.userA}, 'Corrupt goal', 'Corrupt fixture', 1,
+         '{"schedule":null,"connectionIds":[],"memoryIds":[],"approvalPolicyVersion":"1","unexpected":true}'::jsonb,
+         'draft', '{}'::jsonb)
+    `;
+
+    const get = await requestJson<Envelope>(`/api/v1/goals/${corruptGoalId}`, actorAToken);
+    expect(get.response.status).toBe(500);
+    expect(get.body.error?.code).toBe("internal");
+
+    const update = await requestJson<Envelope>(`/api/v1/goals/${corruptGoalId}`, actorAToken, {
+      method: "PATCH",
+      body: { expectedRevision: 1, title: "Must not overwrite corruption" },
+    });
+    expect(update.response.status).toBe(400);
+    expect(update.body.error?.code).toBe("invalid_request");
+
+    const status = await requestJson<Envelope>(
+      `/api/v1/goals/${corruptGoalId}/status`,
+      actorAToken,
+      { method: "POST", body: { expectedRevision: 1, status: "active" } },
+    );
+    expect(status.response.status).toBe(400);
+    expect(status.body.error?.code).toBe("invalid_request");
+
+    const [stored] = await harness.owner.sql<
+      { title: string; revision: number; status: string; config: Record<string, unknown> }[]
+    >`
+      select title, revision, status, config
+      from goals
+      where id = ${corruptGoalId}
+    `;
+    expect(stored).toEqual({
+      title: "Corrupt goal",
+      revision: 1,
+      status: "draft",
+      config: {
+        schedule: null,
+        connectionIds: [],
+        memoryIds: [],
+        approvalPolicyVersion: "1",
+        unexpected: true,
+      },
+    });
+  });
+
   it("supports owner updates and status transitions with revision CAS", async () => {
     const update = await requestJson<Envelope<GoalResource>>(
       `/api/v1/goals/${goalId}`,
@@ -377,6 +433,63 @@ describe.skipIf(!integration)("OpenMuse goal CRUD PostgreSQL integration", () =>
     expect(policy?.relrowsecurity).toBe(true);
     expect(policy?.qual).toContain("created_by = openmuse_actor_id()");
     expect(policy?.with_check).toContain("created_by = openmuse_actor_id()");
+  });
+
+  it("backfills a nested legacy schedule when upgrading from the old progress shape", async () => {
+    const legacy = await provisionIntegrationDatabase(undefined, { seed: false });
+    try {
+      const legacyGoalId = `goal-legacy-${legacy.databaseName}`;
+      await legacy.owner.sql.begin(async (tx) => {
+        await tx`
+          insert into users (id, email, name, email_verified)
+          values (${legacy.ids.userA}, ${`legacy-${legacy.ids.userA}@example.test`}, 'Legacy owner', true)
+        `;
+        await tx`
+          insert into workspaces (id, name, slug, created_by, settings)
+          values (${legacy.ids.workspace}, 'Legacy workspace', ${`legacy-${legacy.databaseName}`}, ${legacy.ids.userA}, '{}'::jsonb)
+        `;
+        await tx`
+          insert into workspace_members
+            (workspace_id, user_id, role, status, invited_by)
+          values (${legacy.ids.workspace}, ${legacy.ids.userA}, 'owner', 'active', ${legacy.ids.userA})
+        `;
+        await tx`drop index if exists goals_due_owner_idx`;
+        await tx`drop policy if exists goals_scope on goals`;
+        await tx`alter table goals drop constraint if exists goals_revision_positive_check`;
+        await tx`alter table goals drop constraint if exists goals_status_check`;
+        await tx`alter table goals drop column if exists revision`;
+        await tx`alter table goals drop column if exists config`;
+        await tx`alter table goals drop column if exists next_run_at`;
+        await tx`
+          insert into goals
+            (id, workspace_id, created_by, title, description, status, progress)
+          values
+            (${legacyGoalId}, ${legacy.ids.workspace}, ${legacy.ids.userA}, 'Legacy goal', 'Legacy instructions', 'active',
+             '{"revision":7,"schedule":{"kind":"interval","everySeconds":3600,"timezone":"UTC"},"connectionIds":["legacy-connection"],"memoryIds":["legacy-memory"],"approvalPolicyVersion":"2"}'::jsonb)
+        `;
+      });
+
+      await legacy.owner.sql.unsafe(await readFile(goalCrudMigration, "utf8"));
+      const [row] = await legacy.owner.sql<
+        { revision: number; config: Record<string, unknown>; next_run_at: string | null }[]
+      >`
+        select revision, config, next_run_at
+        from goals
+        where id = ${legacyGoalId}
+      `;
+      expect(row).toEqual({
+        revision: 7,
+        config: {
+          schedule: { kind: "interval", everySeconds: 3600, timezone: "UTC" },
+          connectionIds: ["legacy-connection"],
+          memoryIds: ["legacy-memory"],
+          approvalPolicyVersion: "2",
+        },
+        next_run_at: null,
+      });
+    } finally {
+      await legacy.close();
+    }
   });
 });
 

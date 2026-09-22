@@ -17,7 +17,7 @@ END,
 config = jsonb_build_object(
   'schedule', CASE
     WHEN jsonb_typeof(progress -> 'schedule') = 'object'
-      AND progress ->> 'kind' IN ('once', 'interval', 'cron')
+      AND progress -> 'schedule' ->> 'kind' IN ('once', 'interval', 'cron')
       THEN progress -> 'schedule'
     ELSE 'null'::jsonb
   END,
