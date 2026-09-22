@@ -193,6 +193,7 @@ async function grantRuntimePrivileges(owner: DatabaseClient, role: string): Prom
     "openmuse_can_read_snapshot(text)",
     "openmuse_can_grant_snapshot(text)",
     "openmuse_can_read_conversation(text)",
+    "openmuse_can_read_conversation_row(text,text,text)",
     "openmuse_can_read_run(text)",
     "openmuse_can_read_task(text)",
     "openmuse_can_read_artifact(text)",
