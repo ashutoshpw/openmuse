@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Daytona as OfficialDaytonaSdk } from "@daytonaio/sdk";
 import {
   ProviderOperationError,
   type ProviderCreateContext,
@@ -87,13 +88,11 @@ export interface DaytonaCreateParams {
 }
 
 export interface OfficialDaytonaConstructor {
-  new (config: {
-    apiKey: string;
-    apiUrl?: string;
-    target?: string;
-    requestTimeoutMs?: number;
-  }): DaytonaSdkClient;
+  new (config: OfficialDaytonaSdkConfig): DaytonaSdkClient;
 }
+
+/** Constructor options verified against the pinned official SDK. */
+export type OfficialDaytonaSdkConfig = ConstructorParameters<typeof OfficialDaytonaSdk>[0];
 
 export function createOfficialDaytonaFactory(
   Daytona: OfficialDaytonaConstructor,

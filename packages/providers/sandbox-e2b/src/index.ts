@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { E2B as OfficialE2BSdk } from "e2b";
 import {
   ProviderOperationError,
   type ProviderCreateContext,
@@ -118,10 +119,13 @@ export interface E2BClientFactory {
 }
 
 export interface OfficialE2BConstructor {
-  new (options: { apiKey: string; domain?: string; apiUrl?: string }): {
+  new (options: OfficialE2BSdkOptions): {
     Sandbox: E2BSandboxClass;
   };
 }
+
+/** Constructor options verified against the pinned official SDK. */
+export type OfficialE2BSdkOptions = ConstructorParameters<typeof OfficialE2BSdk>[0];
 
 export function createOfficialE2BFactory(E2B: OfficialE2BConstructor): E2BClientFactory {
   return {
