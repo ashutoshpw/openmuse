@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { E2B as OfficialE2BSdk } from "e2b";
+import type {
+  CommandHandle as OfficialCommandHandle,
+  Filesystem as OfficialFilesystem,
+  Sandbox as OfficialSandbox,
+} from "e2b";
 import {
   ProviderOperationError,
   type ProviderCreateContext,
@@ -120,17 +125,62 @@ export interface E2BClientFactory {
 
 export interface OfficialE2BConstructor {
   new (options: OfficialE2BSdkOptions): {
-    Sandbox: E2BSandboxClass;
+    Sandbox: typeof OfficialSandbox;
   };
 }
 
 /** Constructor options verified against the pinned official SDK. */
 export type OfficialE2BSdkOptions = ConstructorParameters<typeof OfficialE2BSdk>[0];
 
+function adaptOfficialCommandHandle(handle: OfficialCommandHandle): E2BCommandHandle {
+  return {
+    pid: handle.pid,
+    get stdout() {
+      return handle.stdout;
+    },
+    get stderr() {
+      return handle.stderr;
+    },
+    wait: async () => handle.wait(),
+    kill: async () => handle.kill(),
+  };
+}
+
+function adaptOfficialFiles(files: OfficialFilesystem): E2BFiles {
+  return {
+    read: (path, options) => files.read(path, options),
+    write: (path, data, options) => files.write(path, data, options),
+  };
+}
+
+function adaptOfficialSandbox(sandbox: OfficialSandbox): E2BSandbox {
+  return {
+    sandboxId: sandbox.sandboxId,
+    files: adaptOfficialFiles(sandbox.files),
+    commands: {
+      run: async (command, options) =>
+        adaptOfficialCommandHandle(await sandbox.commands.run(command, options)),
+    },
+    getInfo: (options) => sandbox.getInfo(options),
+    kill: (options) => sandbox.kill(options),
+    setTimeout: (timeoutMs, options) => sandbox.setTimeout(timeoutMs, options),
+  };
+}
+
+function adaptOfficialSandboxClass(sandboxClass: typeof OfficialSandbox): E2BSandboxClass {
+  return {
+    create: async (template, options) =>
+      adaptOfficialSandbox(await sandboxClass.create(template, options)),
+    connect: async (id, options) => adaptOfficialSandbox(await sandboxClass.connect(id, options)),
+    getInfo: (id, options) => sandboxClass.getInfo(id, options),
+    kill: (id, options) => sandboxClass.kill(id, options),
+  };
+}
+
 export function createOfficialE2BFactory(E2B: OfficialE2BConstructor): E2BClientFactory {
   return {
     async create(options) {
-      return new E2B(options).Sandbox;
+      return adaptOfficialSandboxClass(new E2B(options).Sandbox);
     },
   };
 }
@@ -535,7 +585,10 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
     },
     config: {
       version: "1",
-      schema: configSchema,
+      // Zod models optional fields as `T | undefined`; the shared config
+      // contract uses exact optional properties. Runtime parsing above is the
+      // authority, so expose the validated schema at the registration edge.
+      schema: configSchema as unknown as SandboxDriver["config"]["schema"],
       secretReferences: (rawConfig) => [(rawConfig as E2BConfig).apiKeySecret],
       redact: (rawConfig) => {
         const config = rawConfig as E2BConfig;

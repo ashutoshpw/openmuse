@@ -530,7 +530,10 @@ export function createDaytonaSandboxDriver(
     },
     config: {
       version: "1",
-      schema: configSchema,
+      // Zod models optional fields as `T | undefined`; the shared config
+      // contract uses exact optional properties. Runtime parsing above is the
+      // authority, so expose the validated schema at the registration edge.
+      schema: configSchema as unknown as SandboxDriver["config"]["schema"],
       secretReferences: (rawConfig) => [(rawConfig as DaytonaConfig).apiKeySecret],
       redact: (rawConfig) => {
         const config = rawConfig as DaytonaConfig;
@@ -802,7 +805,7 @@ export function createDaytonaSandboxDriver(
                   ...(config.snapshot ? { snapshot: config.snapshot } : { image: selectedImage }),
                   labels: expectedLabels(binding),
                   resources: {
-                    cpu: limits.cpu,
+                    ...(limits.cpu === undefined ? {} : { cpu: limits.cpu }),
                     memory: (limits.memoryMb ?? defaultLimits.memoryMb) / 1024,
                     disk: (limits.diskMb ?? defaultLimits.diskMb) / 1024,
                   },
