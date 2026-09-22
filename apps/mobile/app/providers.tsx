@@ -26,7 +26,8 @@ import {
 import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
 import { runCurrent } from "../src/data/current";
 import type { ProviderConnection } from "../src/data/model";
-import { useSession, useWorkspace } from "../src/state";
+import { useWorkspace } from "../src/state";
+import { WorkspaceScope } from "../src/components/WorkspaceScope";
 
 function connectionFromProvider(value: ProviderInstance): ProviderConnection {
   return {
@@ -79,13 +80,10 @@ function ProviderCard({
 }
 
 function ProvidersContent() {
-  const { session } = useSession();
-  const { workspace } = useWorkspace();
-
   return (
-    <ProvidersWorkspaceContent
-      key={`${session?.user.id ?? "signed-out"}:${workspace?.id ?? "no-workspace"}`}
-    />
+    <WorkspaceScope>
+      <ProvidersWorkspaceContent />
+    </WorkspaceScope>
   );
 }
 
@@ -139,15 +137,21 @@ function ProvidersWorkspaceContent() {
 
   const connectApp = async (app: "gmail" | "calendar") => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
     try {
-      const intent = await (
-        await apiPromise
-      ).createProviderConnectionIntent(workspace.id, app, "/connect/link");
+      const result = await runCurrent(currentApi, (api) =>
+        api.createProviderConnectionIntent(workspace.id, app, "/connect/link"),
+      );
+      if (result.status === "stale") return;
+      const intent = result.value;
       if (!intent.authorizationUrl)
         throw new Error("The server did not return an authorization URL.");
       await Linking.openURL(intent.authorizationUrl);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to start provider authorization.");
+      if (currentApi.isCurrent())
+        setError(
+          cause instanceof Error ? cause.message : "Unable to start provider authorization.",
+        );
     }
   };
 
@@ -167,18 +171,21 @@ function ProvidersWorkspaceContent() {
       return;
     }
     setSaving(true);
+    const currentApi = apiPromise;
     try {
-      await (
-        await apiPromise
-      ).saveProviderSetup(workspace.id, selected, {
-        secrets: { [secretName]: apiKey },
-      });
+      const result = await runCurrent(currentApi, (api) =>
+        api.saveProviderSetup(workspace.id, selected, {
+          secrets: { [secretName]: apiKey },
+        }),
+      );
+      if (result.status === "stale") return;
       setProvider("");
       clearSecret();
       setSelectedProvider(null);
       setShowByok(false);
       await refresh();
     } catch (cause: unknown) {
+      if (!currentApi.isCurrent()) return;
       if (cause instanceof ApiClientError && cause.status === 409) {
         setError(
           "Provider setup changed on the server. Review the refreshed provider and submit again if needed.",
@@ -191,18 +198,23 @@ function ProvidersWorkspaceContent() {
         );
       }
     } finally {
-      setSaving(false);
-      clearSecret();
+      if (currentApi.isCurrent()) {
+        setSaving(false);
+        clearSecret();
+      }
     }
   };
 
   const disconnect = async (item: ProviderConnection) => {
     if (!apiPromise) return;
+    const currentApi = apiPromise;
     try {
-      await (await apiPromise).disconnectProvider(item.id);
+      const result = await runCurrent(currentApi, (api) => api.disconnectProvider(item.id));
+      if (result.status === "stale") return;
       await refresh();
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to disconnect this provider.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to disconnect this provider.");
     }
   };
 

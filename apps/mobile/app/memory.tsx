@@ -24,6 +24,7 @@ import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
 import { runCurrent } from "../src/data/current";
 import type { Memory } from "../src/data/model";
 import { useWorkspace } from "../src/state";
+import { WorkspaceScope } from "../src/components/WorkspaceScope";
 
 function MemoryCard({ memory, onForget }: { memory: Memory; onForget: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -98,20 +99,27 @@ function MemoryContent() {
 
   const create = async () => {
     if (!apiPromise || !workspace || !title.trim() || !text.trim()) return;
+    const currentApi = apiPromise;
     setSaving(true);
     setError(null);
     try {
-      await (
-        await apiPromise
-      ).createMemory(workspace.id, { title: title.trim(), text: text.trim(), scope: "workspace" });
+      const result = await runCurrent(currentApi, (api) =>
+        api.createMemory(workspace.id, {
+          title: title.trim(),
+          text: text.trim(),
+          scope: "workspace",
+        }),
+      );
+      if (result.status === "stale") return;
       setTitle("");
       setText("");
       setShowCreate(false);
       await refresh();
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to save this memory.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to save this memory.");
     } finally {
-      setSaving(false);
+      setSaving((current) => (currentApi.isCurrent() ? false : current));
     }
   };
 
@@ -151,10 +159,11 @@ function MemoryContent() {
           key={memory.id}
           memory={memory}
           onForget={async () => {
-            if (apiPromise) {
-              await (await apiPromise).forgetMemory(memory.id);
-              await refresh();
-            }
+            if (!apiPromise) return;
+            const currentApi = apiPromise;
+            const result = await runCurrent(currentApi, (api) => api.forgetMemory(memory.id));
+            if (result.status === "stale") return;
+            await refresh();
           }}
         />
       ))}
@@ -178,10 +187,18 @@ function MemoryContent() {
   );
 }
 
+function MemoryScopedContent() {
+  return (
+    <WorkspaceScope>
+      <MemoryContent />
+    </WorkspaceScope>
+  );
+}
+
 export default function MemoryRoute() {
   return (
     <RequireSession>
-      <MemoryContent />
+      <MemoryScopedContent />
     </RequireSession>
   );
 }

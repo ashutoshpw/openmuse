@@ -26,6 +26,7 @@ import { runCurrent } from "../../src/data/current";
 import type { Artifact, Attachment } from "../../src/data/model";
 import type { OpenMuseApi } from "../../src/data/api";
 import { useWorkspace } from "../../src/state";
+import { WorkspaceScope } from "../../src/components/WorkspaceScope";
 import { ErrorBanner, PageHeader, RequireSession, Screen } from "../../src/components/Screen";
 import { EmptyState, LoadingState } from "../../src/components/ResourceStates";
 import { LinkButton } from "../../src/components/LinkButton";
@@ -144,6 +145,7 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
 
   const upload = async () => {
     if (!apiPromise) return;
+    const currentApi = apiPromise;
     const picked = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
       multiple: false,
@@ -158,14 +160,16 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
         name: asset.name,
         type: asset.mimeType ?? "application/octet-stream",
       } as unknown as Blob);
-      const uploaded = await (await apiPromise).uploadAttachment(conversationId, body);
+      const uploaded = await (await currentApi).uploadAttachment(conversationId, body);
+      if (!currentApi.isCurrent()) return;
       setAttachments((current) => [...current, uploaded]);
       setAttachmentIds((current) => [...current, uploaded.id]);
       setResourceError(null);
     } catch (cause: unknown) {
-      setResourceError(
-        cause instanceof Error ? cause.message : "Unable to upload that attachment.",
-      );
+      if (currentApi.isCurrent())
+        setResourceError(
+          cause instanceof Error ? cause.message : "Unable to upload that attachment.",
+        );
     }
   };
 
@@ -253,6 +257,14 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
   );
 }
 
+function ConversationScopedContent({ conversationId }: { conversationId: string }) {
+  return (
+    <WorkspaceScope suffix={conversationId}>
+      <ConversationContent conversationId={conversationId} />
+    </WorkspaceScope>
+  );
+}
+
 export default function ConversationRoute() {
   const params = useLocalSearchParams<{ conversationId?: string | string[] }>();
   const conversationId = firstParam(params.conversationId);
@@ -265,7 +277,7 @@ export default function ConversationRoute() {
     );
   return (
     <RequireSession>
-      <ConversationContent conversationId={conversationId} />
+      <ConversationScopedContent conversationId={conversationId} />
     </RequireSession>
   );
 }

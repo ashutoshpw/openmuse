@@ -20,6 +20,8 @@ module.exports = {
   setupFilesAfterEnv: ["<rootDir>/src/test/setup.ts"],
   moduleNameMapper: {
     ...(babelRuntime ? { "^@babel/runtime/(.*)$": `${babelRuntime}/$1` } : {}),
+    "^react$": "<rootDir>/node_modules/react",
+    "^react/jsx-runtime$": "<rootDir>/node_modules/react/jsx-runtime.js",
     "^@/(.*)$": "<rootDir>/src/$1",
     "^@openmuse/design-tokens$": "<rootDir>/../../packages/design-tokens/src/index.ts",
     "^@openmuse/ui-native$": "<rootDir>/../../packages/ui-native/src/index.tsx",

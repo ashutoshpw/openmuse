@@ -27,6 +27,7 @@ import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
 import { runCurrent } from "../../src/data/current";
 import type { Conversation } from "../../src/data/model";
 import { useWorkspace } from "../../src/state";
+import { WorkspaceScope } from "../../src/components/WorkspaceScope";
 
 function ConversationCard({
   conversation,
@@ -92,11 +93,14 @@ function WorkspaceContent() {
 
   const createConversation = async () => {
     if (!apiPromise || !workspace) return;
+    const currentApi = apiPromise;
     try {
-      const conversation = await (await apiPromise).createConversation(workspace.id);
-      router.push(`/conversations/${conversation.id}` as never);
+      const result = await runCurrent(currentApi, (api) => api.createConversation(workspace.id));
+      if (result.status === "stale") return;
+      router.push(`/conversations/${result.value.id}` as never);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to create a conversation.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to create a conversation.");
     }
   };
 
@@ -184,10 +188,18 @@ function WorkspaceContent() {
   );
 }
 
+function WorkspaceScopedContent() {
+  return (
+    <WorkspaceScope>
+      <WorkspaceContent />
+    </WorkspaceScope>
+  );
+}
+
 export default function WorkspaceRoute() {
   return (
     <RequireSession>
-      <WorkspaceContent />
+      <WorkspaceScopedContent />
     </RequireSession>
   );
 }

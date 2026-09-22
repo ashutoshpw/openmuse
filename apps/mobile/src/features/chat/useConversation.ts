@@ -60,6 +60,11 @@ export function useConversation(conversationId: string) {
     return () => clearInterval(interval);
   }, [conversation, refresh, sending]);
 
+  useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, [apiPromise]);
+
   const stop = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -69,7 +74,9 @@ export function useConversation(conversationId: string) {
   const send = useCallback(
     async (text: string, attachmentIds: string[] = []) => {
       if (!apiPromise || !text.trim() || sending) return;
-      const api = await apiPromise;
+      const currentApi = apiPromise;
+      const api = await currentApi;
+      if (!currentApi.isCurrent()) return;
       const normalized = text.trim();
       const optimistic: ChatPart = {
         id: `local-${Date.now()}`,
@@ -92,6 +99,10 @@ export function useConversation(conversationId: string) {
           controller.signal,
         );
         for await (const event of stream) {
+          if (!currentApi.isCurrent()) {
+            controller.abort();
+            return;
+          }
           if (event.type === "part") setParts((current) => mergePart(current, event.part));
           if (event.type === "delta") {
             setParts((current) => {
@@ -111,15 +122,18 @@ export function useConversation(conversationId: string) {
             );
           if (event.type === "error") throw new Error(event.message);
         }
+        if (!currentApi.isCurrent()) return;
         await refresh();
       } catch (cause: unknown) {
-        if ((cause as { name?: string })?.name !== "AbortError") {
+        if (currentApi.isCurrent() && (cause as { name?: string })?.name !== "AbortError") {
           setError(cause instanceof Error ? cause.message : "The message could not be sent.");
           await refresh().catch(() => undefined);
         }
       } finally {
-        abortRef.current = null;
-        setSending(false);
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          if (currentApi.isCurrent()) setSending(false);
+        }
       }
     },
     [apiPromise, conversationId, refresh, sending],

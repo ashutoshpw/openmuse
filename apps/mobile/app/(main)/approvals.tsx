@@ -23,18 +23,25 @@ import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
 import { runCurrent } from "../../src/data/current";
 import type { Approval } from "../../src/data/model";
 import { useWorkspace } from "../../src/state";
+import { WorkspaceScope } from "../../src/components/WorkspaceScope";
 
 function ApprovalCard({ approval, onDone }: { approval: Approval; onDone: () => void }) {
   const apiPromise = useAuthenticatedApi();
   const [busy, setBusy] = useState(false);
   const decide = async (decision: "approve" | "deny") => {
     if (!apiPromise) return;
+    const currentApi = apiPromise;
     setBusy(true);
     try {
-      await (await apiPromise).decideApproval(approval.id, decision);
+      const result = await runCurrent(currentApi, (api) =>
+        api.decideApproval(approval.id, decision),
+      );
+      if (result.status === "stale") return;
       onDone();
+    } catch (cause: unknown) {
+      if (currentApi.isCurrent()) throw cause;
     } finally {
-      setBusy(false);
+      setBusy((current) => (currentApi.isCurrent() ? false : current));
     }
   };
   return (
@@ -134,10 +141,18 @@ function ApprovalsContent() {
   );
 }
 
+function ApprovalsScopedContent() {
+  return (
+    <WorkspaceScope>
+      <ApprovalsContent />
+    </WorkspaceScope>
+  );
+}
+
 export default function ApprovalsRoute() {
   return (
     <RequireSession>
-      <ApprovalsContent />
+      <ApprovalsScopedContent />
     </RequireSession>
   );
 }

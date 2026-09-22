@@ -25,6 +25,7 @@ import { useAuthenticatedApi } from "../src/data/useAuthenticatedApi";
 import { runCurrent } from "../src/data/current";
 import type { Artifact, Conversation, ShareSnapshot } from "../src/data/model";
 import { useWorkspace } from "../src/state";
+import { WorkspaceScope } from "../src/components/WorkspaceScope";
 
 function ShareCard({ share, onRevoke }: { share: ShareSnapshot; onRevoke: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -125,19 +126,22 @@ function SharingContent() {
 
   const create = async () => {
     if (!apiPromise || !workspace || !resource) return;
+    const currentApi = apiPromise;
     try {
-      await (
-        await apiPromise
-      ).createShare(
-        workspace.id,
-        resource.type === "conversation"
-          ? { conversationId: resource.id }
-          : { artifactId: resource.id },
+      const result = await runCurrent(currentApi, (api) =>
+        api.createShare(
+          workspace.id,
+          resource.type === "conversation"
+            ? { conversationId: resource.id }
+            : { artifactId: resource.id },
+        ),
       );
+      if (result.status === "stale") return;
       setShowCreate(false);
       await refresh();
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to create a read-only share.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to create a read-only share.");
     }
   };
 
@@ -176,10 +180,11 @@ function SharingContent() {
           key={share.id}
           share={share}
           onRevoke={async () => {
-            if (apiPromise) {
-              await (await apiPromise).revokeShare(share.id);
-              await refresh();
-            }
+            if (!apiPromise) return;
+            const currentApi = apiPromise;
+            const result = await runCurrent(currentApi, (api) => api.revokeShare(share.id));
+            if (result.status === "stale") return;
+            await refresh();
           }}
         />
       ))}
@@ -218,10 +223,22 @@ function SharingContent() {
   );
 }
 
+function SharingScopedContent() {
+  const params = useLocalSearchParams<{ conversationId?: string | string[] }>();
+  const initialConversationId = Array.isArray(params.conversationId)
+    ? params.conversationId[0]
+    : params.conversationId;
+  return (
+    <WorkspaceScope suffix={initialConversationId ?? ""}>
+      <SharingContent />
+    </WorkspaceScope>
+  );
+}
+
 export default function SharingRoute() {
   return (
     <RequireSession>
-      <SharingContent />
+      <SharingScopedContent />
     </RequireSession>
   );
 }

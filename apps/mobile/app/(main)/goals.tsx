@@ -25,6 +25,7 @@ import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
 import { runCurrent } from "../../src/data/current";
 import type { Goal } from "../../src/data/model";
 import { useWorkspace } from "../../src/state";
+import { WorkspaceScope } from "../../src/components/WorkspaceScope";
 
 function GoalCard({ goal, onRefresh }: { goal: Goal; onRefresh: () => void }) {
   return (
@@ -89,25 +90,28 @@ function GoalsContent() {
 
   const create = async () => {
     if (!apiPromise || !workspace || !title.trim()) return;
+    const currentApi = apiPromise;
     setSaving(true);
     setError(null);
     try {
-      await (
-        await apiPromise
-      ).createGoal(workspace.id, {
-        title: title.trim(),
-        detail: detailRef.current.trim() || undefined,
-        schedule: scheduleRef.current.trim() || undefined,
-      });
+      const result = await runCurrent(currentApi, (api) =>
+        api.createGoal(workspace.id, {
+          title: title.trim(),
+          detail: detailRef.current.trim() || undefined,
+          schedule: scheduleRef.current.trim() || undefined,
+        }),
+      );
+      if (result.status === "stale") return;
       setTitle("");
       detailRef.current = "";
       scheduleRef.current = "";
       setShowCreate(false);
       await refresh();
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to create the goal.");
+      if (currentApi.isCurrent())
+        setError(cause instanceof Error ? cause.message : "Unable to create the goal.");
     } finally {
-      setSaving(false);
+      setSaving((current) => (currentApi.isCurrent() ? false : current));
     }
   };
 
@@ -180,10 +184,18 @@ function GoalsContent() {
   );
 }
 
+function GoalsScopedContent() {
+  return (
+    <WorkspaceScope>
+      <GoalsContent />
+    </WorkspaceScope>
+  );
+}
+
 export default function GoalsRoute() {
   return (
     <RequireSession>
-      <GoalsContent />
+      <GoalsScopedContent />
     </RequireSession>
   );
 }
