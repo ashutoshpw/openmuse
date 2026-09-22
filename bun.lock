@@ -318,30 +318,8 @@
         "vitest": "catalog:testing",
       },
     },
-    "packages/providers/sandbox-daytona": {
-      "name": "@openmuse/provider-sandbox-daytona",
-      "version": "0.1.0",
-      "dependencies": {
-        "@openmuse/provider-contracts": "workspace:*",
-        "zod": "catalog:",
-      },
-      "devDependencies": {
-        "vitest": "catalog:testing",
-      },
-    },
     "packages/providers/sandbox-docker": {
       "name": "@openmuse/provider-sandbox-docker",
-      "version": "0.1.0",
-      "dependencies": {
-        "@openmuse/provider-contracts": "workspace:*",
-        "zod": "catalog:",
-      },
-      "devDependencies": {
-        "vitest": "catalog:testing",
-      },
-    },
-    "packages/providers/sandbox-e2b": {
-      "name": "@openmuse/provider-sandbox-e2b",
       "version": "0.1.0",
       "dependencies": {
         "@openmuse/provider-contracts": "workspace:*",
@@ -865,11 +843,7 @@
 
     "@openmuse/provider-model-openai-compatible": ["@openmuse/provider-model-openai-compatible@workspace:packages/providers/model-openai-compatible"],
 
-    "@openmuse/provider-sandbox-daytona": ["@openmuse/provider-sandbox-daytona@workspace:packages/providers/sandbox-daytona"],
-
     "@openmuse/provider-sandbox-docker": ["@openmuse/provider-sandbox-docker@workspace:packages/providers/sandbox-docker"],
-
-    "@openmuse/provider-sandbox-e2b": ["@openmuse/provider-sandbox-e2b@workspace:packages/providers/sandbox-e2b"],
 
     "@openmuse/provider-search-exa": ["@openmuse/provider-search-exa@workspace:packages/providers/search-exa"],
 

@@ -56,6 +56,11 @@ live.
 
 ## CI-green milestone
 
+- [x] Sandbox service/driver local review checkpoint: scoped authentication,
+      bounded file/exec behavior, cleanup uncertainty, request/inspection
+      deadlines, and real Docker lifecycle smoke passed locally (10 focused
+      tests and 2 Docker smoke tests). This is local-only evidence; it does
+      not establish hosted deployment, provider capacity, or production proof.
 - [ ] Integrate peer changes without unrelated dirty files, then pass frozen
       install, quality, format, lint, typecheck, unit, native Jest/export,
       PostgreSQL smoke plus auth integration, web Playwright, and aggregate
