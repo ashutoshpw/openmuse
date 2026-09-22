@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -89,8 +89,17 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [voiceMode, setVoiceMode] = useState<"live" | "recorded">("live");
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const workspaceId = workspace?.id;
   const attachmentIdSet = useMemo(() => new Set(attachmentIds), [attachmentIds]);
+
+  useEffect(
+    () => () => {
+      uploadAbortRef.current?.abort("conversation scope changed");
+      uploadAbortRef.current = null;
+    },
+    [apiPromise],
+  );
 
   useEffect(() => {
     let active = true;
@@ -139,8 +148,19 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
   }, [loadResources]);
 
   const activeApi = apiPromise && resolvedApi?.promise === apiPromise ? resolvedApi.api : null;
-  const liveVoice = useLiveVoice({ api: activeApi, workspaceId, conversationId });
-  const recordedVoice = useRecordedVoice({ api: activeApi, workspaceId, conversationId });
+  const voiceScope = apiPromise && resolvedApi?.promise === apiPromise ? apiPromise : null;
+  const liveVoice = useLiveVoice({
+    api: activeApi,
+    scope: voiceScope,
+    workspaceId,
+    conversationId,
+  });
+  const recordedVoice = useRecordedVoice({
+    api: activeApi,
+    scope: voiceScope,
+    workspaceId,
+    conversationId,
+  });
   const activeVoice = voiceMode === "live" ? liveVoice : recordedVoice;
 
   const upload = async () => {
@@ -152,6 +172,9 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
       type: "*/*",
     });
     if (picked.canceled || !picked.assets[0]) return;
+    if (!currentApi.isCurrent()) return;
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     try {
       const asset = picked.assets[0];
       const body = new FormData();
@@ -160,16 +183,20 @@ function ConversationContent({ conversationId }: { conversationId: string }) {
         name: asset.name,
         type: asset.mimeType ?? "application/octet-stream",
       } as unknown as Blob);
-      const uploaded = await (await currentApi).uploadAttachment(conversationId, body);
-      if (!currentApi.isCurrent()) return;
-      setAttachments((current) => [...current, uploaded]);
-      setAttachmentIds((current) => [...current, uploaded.id]);
+      const result = await runCurrent(currentApi, (api) =>
+        api.uploadAttachment(conversationId, body, controller.signal),
+      );
+      if (result.status === "stale") return;
+      setAttachments((current) => [...current, result.value]);
+      setAttachmentIds((current) => [...current, result.value.id]);
       setResourceError(null);
     } catch (cause: unknown) {
-      if (currentApi.isCurrent())
+      if (currentApi.isCurrent() && !controller.signal.aborted)
         setResourceError(
           cause instanceof Error ? cause.message : "Unable to upload that attachment.",
         );
+    } finally {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
     }
   };
 

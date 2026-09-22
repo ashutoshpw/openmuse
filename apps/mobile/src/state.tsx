@@ -305,7 +305,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     async (name: string) => {
       if (!authenticatedApi)
         throw new OpenMuseApiError("Sign in before creating a workspace.", "unauthorized");
-      const created = await (await authenticatedApi).createWorkspace(name);
+      const currentApi = authenticatedApi;
+      const result = await runCurrent(currentApi, (api) => api.createWorkspace(name));
+      if (result.status === "stale")
+        throw new Error("Workspace creation was cancelled because the account changed.");
+      const created = result.value;
       setWorkspaces((current) => [...current, created]);
       setWorkspace(created);
       return created;

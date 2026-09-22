@@ -10,6 +10,7 @@ import {
 } from "@openmuse/ui-native";
 import { ErrorBanner, PageHeader, RequireSession, Screen } from "../../src/components/Screen";
 import { LoadingState } from "../../src/components/ResourceStates";
+import { runCurrent } from "../../src/data/current";
 import { useAuthenticatedApi } from "../../src/data/useAuthenticatedApi";
 
 function firstParam(value: string | string[] | undefined) {
@@ -54,21 +55,27 @@ function CallbackContent() {
         active = false;
       };
     }
-    void apiPromise
-      .then((api) =>
-        api.handleAppConnectCallback({
+    const controller = new AbortController();
+    void runCurrent(apiPromise, (api) =>
+      // Scope fencing prevents dispatch after account invalidation. Once the
+      // request is sent, abort cannot guarantee that the server rolls it back.
+      api.handleAppConnectCallback(
+        {
           code: callbackCode,
           state: callbackState,
-        }),
-      )
-      .then(() => {
+        },
+        controller.signal,
+      ),
+    )
+      .then((result) => {
+        if (result.status === "stale") return;
         if (active)
           setMessage(
             "The provider connection was returned to the server. You can close this screen or review Connections.",
           );
       })
       .catch((cause: unknown) => {
-        if (active)
+        if (active && !controller.signal.aborted)
           setError(
             cause instanceof Error
               ? cause.message
@@ -80,6 +87,7 @@ function CallbackContent() {
       });
     return () => {
       active = false;
+      controller.abort("account scope changed");
     };
   }, [apiPromise, callbackCode, callbackError, callbackState, hasCallback]);
 

@@ -494,10 +494,10 @@ export class OpenMuseApi {
     );
   }
 
-  async uploadAttachment(conversationId: string, body: FormData) {
+  async uploadAttachment(conversationId: string, body: FormData, signal?: AbortSignal) {
     return this.raw(
       `/api/v1/conversations/${encodeURIComponent(conversationId)}/attachments`,
-      { method: "POST", body },
+      { method: "POST", body, signal },
       (value) => attachmentFromRaw(unwrapEnvelope(value)),
     );
   }
@@ -722,22 +722,28 @@ export class OpenMuseApi {
     await this.client.revokeShare(shareId);
   }
 
-  async handleAppConnectCallback(params: { code?: string; state?: string; error?: string }) {
+  async handleAppConnectCallback(
+    params: { code?: string; state?: string; error?: string },
+    signal?: AbortSignal,
+  ) {
     return this.raw(
       "/api/v1/connections/intents/complete",
-      { method: "POST", body: JSON.stringify(params) },
+      { method: "POST", body: JSON.stringify(params), signal },
       (value) => unwrapEnvelope(value),
     );
   }
 
-  async createRealtimeVoiceSession(input: {
-    offer: string;
-    workspaceId?: string;
-    conversationId?: string;
-  }) {
+  async createRealtimeVoiceSession(
+    input: {
+      offer: string;
+      workspaceId?: string;
+      conversationId?: string;
+    },
+    signal?: AbortSignal,
+  ) {
     return this.raw(
       "/api/v1/voice/realtime/session",
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: JSON.stringify(input), signal },
       (value) => {
         const item = unwrapEnvelope(value);
         if (!isRecord(item) || typeof item.sdp !== "string" || item.sdp.length === 0)
@@ -750,12 +756,15 @@ export class OpenMuseApi {
     );
   }
 
-  async uploadVoiceRecording(input: {
-    uri: string;
-    mimeType?: string;
-    workspaceId?: string;
-    conversationId?: string;
-  }) {
+  async uploadVoiceRecording(
+    input: {
+      uri: string;
+      mimeType?: string;
+      workspaceId?: string;
+      conversationId?: string;
+    },
+    signal?: AbortSignal,
+  ) {
     const body = new FormData();
     body.append("file", {
       uri: input.uri,
@@ -764,7 +773,7 @@ export class OpenMuseApi {
     } as unknown as Blob);
     if (input.workspaceId) body.append("workspaceId", input.workspaceId);
     if (input.conversationId) body.append("conversationId", input.conversationId);
-    return this.raw("/api/v1/voice/recordings", { method: "POST", body }, (value) =>
+    return this.raw("/api/v1/voice/recordings", { method: "POST", body, signal }, (value) =>
       unwrapEnvelope(value),
     );
   }
