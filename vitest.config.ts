@@ -6,7 +6,7 @@ export default defineConfig({
       "apps/**/*.test.{ts,tsx}",
       "apps/**/*.spec.{ts,tsx}",
       "packages/**/*.test.{ts,tsx}",
-      "packages/**/*.spec.{ts,tsx}"
+      "packages/**/*.spec.{ts,tsx}",
     ],
     exclude: [
       "**/node_modules/**",
@@ -19,9 +19,9 @@ export default defineConfig({
       "**/android/**",
       "apps/mobile/**",
       "**/e2e/**",
+      "**/*.integration.test.*",
       "**/*.native.test.*",
-      "**/*.native.spec.*"
+      "**/*.native.spec.*",
     ],
-    passWithNoTests: true
-  }
+  },
 });

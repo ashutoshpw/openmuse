@@ -93,6 +93,7 @@ jobs:
       MIGRATION_DATABASE_URL: postgres://openmuse_migrator:openmuse_migrator_ci@127.0.0.1:5432/openmuse
       WORKER_DATABASE_URL: postgres://openmuse_worker:openmuse_worker_ci@127.0.0.1:5432/openmuse
       AUTH_DATABASE_URL: postgres://openmuse_auth:openmuse_auth_ci@127.0.0.1:5432/openmuse
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openmuse
       RUNTIME_DB_ROLE: openmuse_runtime
       WORKER_DB_ROLE: openmuse_worker
     steps:
@@ -151,6 +152,8 @@ jobs:
           SQL
       - name: Run PostgreSQL RLS smoke test
         run: bun run test:pg
+      - name: Run auth and RLS integration tests
+        run: bun run test:auth
 
   web:
     name: Web Playwright

@@ -8,8 +8,8 @@ live.
 
 - [x] Establish Bun 1.4.2 workspace metadata, catalogs, strict TypeScript, and
       the Turbo task graph.
-- [x] Keep root Vitest, native Jest, and web Playwright test selection
-      independent.
+- [x] Keep root Vitest, Bun auth integration, native Jest, and web Playwright
+      test selection independent; unit Vitest excludes `*.integration.test.*`.
 - [x] Add Oxlint/Oxfmt configuration, repository boundary checks, secret and
       license checks, Knip dependency checks, and a no-bypass pre-commit hook.
 - [x] Add pinned-permission CI jobs for quality, native Jest/Expo iOS Hermes
@@ -19,19 +19,54 @@ live.
       deterministic mocked Playwright coverage. Local evidence: 7 web tests,
       web typecheck/build, and visual desktop/mobile screenshots pass.
 - [x] Native Jest wrapper runs the current suite (5 tests pass locally).
+- [x] Auth/RLS integration runner fails closed without `TEST_DATABASE_URL` and
+      provisions disposable non-owner runtime and auth roles when configured.
 
-## Outstanding implementation and proof
+## Launch scope still outstanding
 
-- [ ] Complete API authentication, workspace/resource endpoints, provider
-      CRUD, sharing resolution, artifact/media storage, and durable worker
-      integration; source contracts alone are not runtime proof.
-- [ ] Complete native lint and any remaining native runtime/accessibility work.
-- [ ] Finish the isolated PostgreSQL integration fixture and verify runtime,
-      migration, worker, and auth roles against it.
-- [ ] Run the full root lint/format/typecheck/build matrix after all agents'
-      changes are integrated; current concurrent files may still be
-      unformatted or fail native lint.
-- [ ] Run React Doctor against an actual selected source scope; the previous
-      changed-file invocation returned no score.
-- [ ] Prove a frozen install from a clean committed checkout and record the
-      exact SHA. No deployment or store-release claim is made here.
+### Product and server behavior
+
+- [ ] Prove deployed Better Auth cookie and bearer sessions, trusted origins,
+      bootstrap behavior, revocation, and error redaction against the real API.
+- [ ] Complete and exercise workspace/resource CRUD, sharing resolution,
+      provider CRUD and credential rotation, artifact/media storage, and all
+      tenant authorization predicates through the HTTP boundary.
+- [ ] Integrate the durable worker with lease fencing, retries, idempotency,
+      provider execution, approval pauses, and observable failure recovery.
+
+### Security, data, and providers
+
+- [ ] Run the PostgreSQL smoke and auth/RLS integration lanes against CI's
+      disposable database and retain evidence for migration, runtime, worker,
+      and non-owner auth roles.
+- [ ] Verify provider ownership, encrypted write-only secrets, config-digest
+      concurrency, sandbox cancellation/deadlines, artifact limits, and
+      connector/model/search capability boundaries with real providers or
+      explicitly documented fakes.
+- [ ] Exercise migration rollback/forward compatibility, backup/restore, data
+      retention, and tenant-isolation failure paths before production use.
+
+### Client and operations
+
+- [ ] Complete native lint, device-level accessibility/runtime checks, deep-link
+      and offline behavior, release metadata, signing, and store build proof.
+- [ ] Deploy API, worker, web, and provider runtime with scoped secrets,
+      health/readiness checks, structured logs/metrics, rate limits, capacity
+      evidence, rollback, and an authenticated production smoke test.
+
+## CI-green milestone
+
+- [ ] Integrate peer changes without unrelated dirty files, then pass frozen
+      install, quality, format, lint, typecheck, unit, native Jest/export,
+      PostgreSQL smoke plus auth integration, web Playwright, and aggregate
+      gates from one exact committed SHA.
+- [x] Candidate clean archive from current committed HEAD (`91349f8`) passed
+      frozen install, quality, unit, native Jest/export, build, and 7 web
+      Playwright tests; PostgreSQL was unavailable locally.
+- [ ] Record the first hosted green `main` run. Remote run `35712766820` at
+      `4a006da` failed before tests because `bun install --frozen-lockfile`
+      detected a lockfile mismatch; it was not rerun or mutated.
+- [x] React Doctor 0.9.14 full `apps/web` scan is 91/100 with no changed-scope
+      findings; two maintainability complexity warnings remain for follow-up.
+- [ ] Prove the final frozen install from a clean checkout after the CI-green
+      commit; no deployment or store-release claim is implied by local checks.

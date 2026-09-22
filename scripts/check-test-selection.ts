@@ -12,6 +12,7 @@ const webPackage = JSON.parse(await readFile("apps/web/package.json", "utf8")) a
 };
 const webRunner = await readFile("scripts/test-web.sh", "utf8");
 const nativeRunner = await readFile("scripts/test-native.sh", "utf8");
+const authRunner = await readFile("scripts/test-auth.sh", "utf8");
 const failures: string[] = [];
 
 function requireText(text: string, needle: string, label: string): void {
@@ -20,10 +21,14 @@ function requireText(text: string, needle: string, label: string): void {
 
 requireText(rootVitest, '"**/e2e/**"', "root Vitest exclusion");
 requireText(rootVitest, '"apps/mobile/**"', "root Vitest exclusion");
+requireText(rootVitest, '"**/*.integration.test.*"', "root Vitest exclusion");
 requireText(rootVitest, '"**/*.native.test.*"', "root Vitest exclusion");
 requireText(rootVitest, '"**/*.native.spec.*"', "root Vitest exclusion");
 requireText(rootPackage.scripts?.test ?? "", "test:unit", "root test script");
+requireText(rootPackage.scripts?.["test:auth"] ?? "", "test-auth", "auth integration script");
 requireText(rootPackage.scripts?.["test:native"] ?? "", "test-native", "native test script");
+requireText(authRunner, "auth.integration.test.ts", "auth integration runner");
+requireText(authRunner, "TEST_DATABASE_URL", "auth integration database guard");
 requireText(nativeRunner, "bun run test", "native test runner");
 requireText(rootPackage.scripts?.["test:web"] ?? "", "test-web", "web test script");
 requireText(webRunner, "test:e2e", "web test runner");
@@ -36,4 +41,6 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("Test selection passed: unit, native Jest, and web Playwright suites are separated.");
+console.log(
+  "Test selection passed: unit, auth integration, native Jest, and web Playwright suites are separated.",
+);
