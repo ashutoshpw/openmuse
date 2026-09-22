@@ -160,6 +160,8 @@ const configSchema = z
     apiKeySecret: z.string().trim().min(1),
     domain: z.string().trim().min(1).optional(),
     template: z.string().trim().min(1).optional(),
+    /** Alias matching the shared SandboxConfig vocabulary. */
+    image: z.string().trim().min(1).optional(),
     allowedTemplates: z.array(z.string().trim().min(1)).max(100).default([]),
     /** Alias matching the shared SandboxConfig vocabulary. */
     allowedImages: z.array(z.string().trim().min(1)).max(100).default([]),
@@ -200,6 +202,7 @@ interface E2BConfig extends SandboxConfig {
   apiKeySecret: string;
   domain?: string;
   template?: string;
+  image?: string;
   allowedTemplates: string[];
   allowedImages: string[];
   maxSeconds: number;
@@ -508,6 +511,7 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
           ...(config.endpoint ? { endpoint: config.endpoint } : {}),
           ...(config.domain ? { domain: config.domain } : {}),
           ...(config.template ? { template: config.template } : {}),
+          ...(config.image ? { image: config.image } : {}),
           allowedTemplates: config.allowedTemplates,
           allowedImages: config.allowedImages,
         };
@@ -542,7 +546,10 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
           "E2B requires a non-empty template allowlist.",
           "The E2B provider is not configured.",
         );
-      if (config.template && !allowedTemplates.includes(config.template))
+      if (
+        (config.template && !allowedTemplates.includes(config.template)) ||
+        (config.image && !allowedTemplates.includes(config.image))
+      )
         throw providerError(
           providerId,
           "configure",
@@ -750,7 +757,7 @@ export function createE2BSandboxDriver(options: E2BSandboxDriverOptions = {}): S
               "Sandbox workspace binding changed.",
               "The sandbox is not available in this workspace.",
             );
-          const template = request.image ?? config.template;
+          const template = request.image ?? config.template ?? config.image;
           if (!template)
             throw providerError(
               providerId,
